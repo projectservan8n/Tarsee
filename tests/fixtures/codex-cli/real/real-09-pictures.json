@@ -1,0 +1,99 @@
+{
+  "name": "real-09-pictures",
+  "what": "A picture on a new thread (`--image <file>` last) and on a resumed one (`resume <id> --image <file>`): the program accepts both, and the picture reaches the model as an input_image part of the user message.",
+  "made_with": {
+    "program": "codex 0.167.0 (the real pinned program), started with the argument list, environment and stdin the SDK produced",
+    "platform": "win32"
+  },
+  "newThread": {
+    "argvTail": [
+      "--config",
+      "approval_policy=\"never\"",
+      "--image",
+      "<RUN_DIR>\\image-1.png"
+    ],
+    "stdin": "What is in this picture?",
+    "exitCode": 0,
+    "stdoutLines": [
+      "{\"type\":\"thread.started\",\"thread_id\":\"<THREAD_ID>\"}",
+      "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Model metadata for `test-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.\"}}",
+      "{\"type\":\"turn.started\"}",
+      "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"reasoning\",\"text\":\"Thinking briefly.\"}}",
+      "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_2\",\"type\":\"agent_message\",\"text\":\"Hello from the fake model.\"}}",
+      "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1200,\"cached_input_tokens\":200,\"cache_write_input_tokens\":0,\"output_tokens\":30,\"reasoning_output_tokens\":12}}"
+    ],
+    "stderr": "Reading prompt from stdin...\n",
+    "requestsToTheModel": [
+      {
+        "method": "POST",
+        "path": "/v1/responses",
+        "authorization": "Bearer <PROVIDER_KEY>",
+        "model": "test-model",
+        "toolNames": [
+          "exec_command",
+          "write_stdin",
+          "list_mcp_resources",
+          "list_mcp_resource_templates",
+          "read_mcp_resource",
+          "request_user_input",
+          "view_image",
+          "mcp__tarsee"
+        ],
+        "inputTypes": [
+          "message:developer:input_text",
+          "message:developer:input_text+input_text+input_text",
+          "message:user:input_text",
+          "message:user:input_text+input_image+input_text+input_text"
+        ]
+      }
+    ]
+  },
+  "resumed": {
+    "argvTail": [
+      "--config",
+      "approval_policy=\"never\"",
+      "resume",
+      "<THREAD_ID>",
+      "--image",
+      "<RUN_DIR>\\image-1.png"
+    ],
+    "stdin": "And this one?",
+    "exitCode": 0,
+    "stdoutLines": [
+      "{\"type\":\"thread.started\",\"thread_id\":\"<THREAD_ID>\"}",
+      "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Model metadata for `test-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.\"}}",
+      "{\"type\":\"turn.started\"}",
+      "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"reasoning\",\"text\":\"Thinking briefly.\"}}",
+      "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_2\",\"type\":\"agent_message\",\"text\":\"Hello from the fake model.\"}}",
+      "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":2400,\"cached_input_tokens\":400,\"cache_write_input_tokens\":0,\"output_tokens\":60,\"reasoning_output_tokens\":24}}"
+    ],
+    "stderr": "Reading prompt from stdin...\n",
+    "requestsToTheModel": [
+      {
+        "method": "POST",
+        "path": "/v1/responses",
+        "authorization": "Bearer <PROVIDER_KEY>",
+        "model": "test-model",
+        "toolNames": [
+          "exec_command",
+          "write_stdin",
+          "list_mcp_resources",
+          "list_mcp_resource_templates",
+          "read_mcp_resource",
+          "request_user_input",
+          "view_image",
+          "mcp__tarsee"
+        ],
+        "inputTypes": [
+          "message:developer:input_text",
+          "message:developer:input_text+input_text+input_text",
+          "message:user:input_text",
+          "message:user:input_text+input_image+input_text+input_text",
+          "reasoning",
+          "message:assistant:output_text",
+          "message:user:input_text+input_image+input_text+input_text"
+        ]
+      }
+    ]
+  }
+}

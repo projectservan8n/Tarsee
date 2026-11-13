@@ -1,0 +1,548 @@
+{
+  "name": "stop-interrupt-request",
+  "description": "An interrupt control request in the middle of a streamed answer: control_response{still_queued}, the partial assistant message (aborted: true), a user message '[Request interrupted by user]', result/error_during_execution, session_state_changed idle; then stdin closed; exit code 1.",
+  "how": "The real claude 2.1.319 started directly (no SDK) with stdin, stdout and stderr as pipes, in an empty home, with a fake credential, against a loopback stand-in for the Messages API. t is milliseconds from the start of the process.",
+  "argv": [
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--max-turns=50",
+    "--model=claude-sonnet-4-5",
+    "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--setting-sources=project",
+    "--strict-mcp-config",
+    "--permission-mode=bypassPermissions",
+    "--allow-dangerously-skip-permissions",
+    "--include-partial-messages"
+  ],
+  "exit": {
+    "code": 1,
+    "signal": null,
+    "at_ms": 5432
+  },
+  "stderr": "",
+  "stdin_written": [
+    {
+      "t": 8,
+      "json": {
+        "request_id": "init2",
+        "type": "control_request",
+        "request": {
+          "subtype": "initialize",
+          "systemPrompt": [
+            "You are a test."
+          ],
+          "systemPromptSnapshot": false
+        }
+      }
+    },
+    {
+      "t": 8,
+      "json": {
+        "type": "user",
+        "session_id": "",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "say hi"
+            }
+          ]
+        },
+        "parent_tool_use_id": null
+      }
+    },
+    {
+      "t": 3957,
+      "json": {
+        "request_id": "int1",
+        "type": "control_request",
+        "request": {
+          "subtype": "interrupt"
+        }
+      }
+    },
+    {
+      "t": 4611,
+      "event": "stdin-end"
+    }
+  ],
+  "stdout": [
+    {
+      "t": 3270,
+      "json": {
+        "type": "control_response",
+        "response": {
+          "subtype": "success",
+          "request_id": "init2",
+          "response": {
+            "commands": "<44 commands; cut from this fixture>",
+            "agents": "<5 agents; cut from this fixture>",
+            "output_style": "default",
+            "available_output_styles": [
+              "default",
+              "Proactive",
+              "Concise",
+              "Explanatory",
+              "Learning"
+            ],
+            "user_output_styles_dir": "<HOME>\\.claude\\output-styles",
+            "models": "<6 models; cut from this fixture>",
+            "account": {
+              "tokenSource": "ANTHROPIC_AUTH_TOKEN",
+              "apiProvider": "firstParty"
+            },
+            "pid": 5596,
+            "claude_code_version": "2.1.319",
+            "current_permission_mode": "bypassPermissions",
+            "hook_on_failure_supported": true,
+            "feedback_mode": {
+              "kind": "disabled"
+            },
+            "analytics_disabled": true,
+            "remote_control_auto_enable": false,
+            "remote_control_auto_connect_default": false,
+            "remote_control_available": false,
+            "remote_control_auto_on_by_default": false,
+            "ide_rc_auto_enable_gate": false,
+            "fast_mode_state": "off",
+            "fast_mode_disabled_reason": "sdk_opt_in_required",
+            "session_state": "idle",
+            "capabilities": [
+              "ui_surface_v1",
+              "mcp_call_result_not_for_model_v1",
+              "mcp_call_check_permissions_v1"
+            ]
+          },
+          "pending_permission_requests": [],
+          "pending_user_dialog_requests": []
+        }
+      }
+    },
+    {
+      "t": 3275,
+      "json": {
+        "type": "system",
+        "subtype": "session_state_changed",
+        "state": "running",
+        "sdk_host_only": true,
+        "uuid": "a381f9c2-0da2-420d-beba-6558069640a4",
+        "session_id": "ce776c14-2cb4-4fc9-8a0f-4018f3d6b6c5"
+      }
+    },
+    {
+      "t": 3806,
+      "json": {
+        "type": "system",
+        "subtype": "init",
+        "cwd": "<WORKSPACE>",
+        "session_id": "ce776c14-2cb4-4fc9-8a0f-4018f3d6b6c5",
+        "tools": [
+          "Bash",
+          "Edit",
+          "Glob",
+          "Grep",
+          "Read",
+          "Write"
+        ],
+        "mcp_servers": [],
+        "model": "claude-sonnet-4-5",
+        "permissionMode": "bypassPermissions",
+        "slash_commands": "<44 slash commands; cut from this fixture>",
+        "terminal_slash_commands": "<4 terminal slash commands; cut from this fixture>",
+        "apiKeySource": "none",
+        "claude_code_version": "2.1.319",
+        "output_style": "default",
+        "agents": [
+          "claude",
+          "Explore",
+          "general-purpose",
+          "Plan",
+          "statusline-setup"
+        ],
+        "skills": "<16 skills; cut from this fixture>",
+        "plugins": [
+          {
+            "name": "cc-plugin-agents-md",
+            "path": "builtin",
+            "source": "cc-plugin-agents-md@builtin"
+          },
+          {
+            "name": "cc-plugin-privacy",
+            "path": "builtin",
+            "source": "cc-plugin-privacy@builtin"
+          },
+          {
+            "name": "cc-plugin-plugin-authoring",
+            "path": "builtin",
+            "source": "cc-plugin-plugin-authoring@builtin"
+          }
+        ],
+        "capabilities": [
+          "interrupt_receipt_v1",
+          "interrupt_cancel_queued_v1",
+          "interrupt_send_now_v1",
+          "interrupt_requeue_taken_v1",
+          "msg_lifecycle_v1",
+          "request_marker_lists_v1",
+          "ask_user_question_unanswered_v1",
+          "lifecycle_wakeup_source_v1",
+          "sdk_mcp_tools_list_changed",
+          "sdk_mcp_manifests",
+          "mcp_read_resource_v1",
+          "mcp_tool_ui_meta_v1",
+          "ui_surface_v1",
+          "mcp_call_result_not_for_model_v1",
+          "mcp_call_check_permissions_v1"
+        ],
+        "analytics_disabled": true,
+        "product_feedback_disabled": true,
+        "uuid": "8b9af233-46cf-4e7a-8364-769be76eb00b",
+        "memory_paths": {
+          "auto": "<HOME>\\.claude\\projects\\<WORKSPACE_AS_FOLDER_NAME>\\memory\\"
+        },
+        "original_cwd": "<WORKSPACE>",
+        "additional_directories": [],
+        "messaging_socket_path": "\\\\.\\pipe\\LOCAL\\cc-msg-ff4546d46479c060fab146c373af3645",
+        "fast_mode_state": "off",
+        "fast_mode_disabled_reason": "sdk_opt_in_required",
+        "per_turn_effort_active": false,
+        "ultrathink_available": false,
+        "ultrathink_typed_raises": false,
+        "view_mode": "default",
+        "powershell_path": "<POWERSHELL_EXE>"
+      }
+    },
+    {
+      "t": 3816,
+      "json": {
+        "type": "system",
+        "subtype": "status",
+        "status": "requesting",
+        "session_id": "ce776c14-2cb4-4fc9-8a0f-4018f3d6b6c5",
+        "uuid": "dee40b69-b082-4bfa-99d2-68fb1914cc6b"
+      }
+    },
+    {
+      "t": 3956,
+      "json": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fake_2",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-5",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "usage": {
+              "input_tokens": 12,
+              "output_tokens": 1,
+              "cache_read_input_tokens": 0,
+              "cache_creation_input_tokens": 0
+            }
+          }
+        },
+        "session_id": "ce776c14-2cb4-4fc9-8a0f-4018f3d6b6c5",
+        "parent_tool_use_id": null,
+        "uuid": "f8380a48-83a5-445b-97e7-699d3cacc8d9",
+        "ttft_ms": 89,
+        "thinking_display": "updates",
+        "api_message_id": "msg_fake_2"
+      }
+    },
+    {
+      "t": 3956,
+      "json": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": ""
+          }
+        },
+        "session_id": "ce776c14-2cb4-4fc9-8a0f-4018f3d6b6c5",
+        "parent_tool_use_id": null,
+        "uuid": "ec8bcbb8-af92-4226-888c-f0e5499e7188",
+        "api_message_id": "msg_fake_2"
+      }
+    },
+    {
+      "t": 3956,
+      "json": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "text_delta",
+            "text": "This answer "
+          }
+        },
+        "session_id": "ce776c14-2cb4-4fc9-8a0f-4018f3d6b6c5",
+        "parent_tool_use_id": null,
+        "uuid": "0c3362b9-baa5-4ece-af81-7fe2ad6923fd",
+        "api_message_id": "msg_fake_2"
+      }
+    },
+    {
+      "t": 3957,
+      "json": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "text_delta",
+            "text": "will never "
+          }
+        },
+        "session_id": "ce776c14-2cb4-4fc9-8a0f-4018f3d6b6c5",
+        "parent_tool_use_id": null,
+        "uuid": "327cf75e-2fc4-435e-a902-a72c3f249866",
+        "api_message_id": "msg_fake_2"
+      }
+    },
+    {
+      "t": 3957,
+      "json": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "text_delta",
+            "text": "finish because"
+          }
+        },
+        "session_id": "ce776c14-2cb4-4fc9-8a0f-4018f3d6b6c5",
+        "parent_tool_use_id": null,
+        "uuid": "ae3e80ed-58e3-4853-ad3b-8640cb3e1bc0",
+        "api_message_id": "msg_fake_2"
+      }
+    },
+    {
+      "t": 4225,
+      "json": {
+        "type": "control_response",
+        "response": {
+          "subtype": "success",
+          "request_id": "int1",
+          "response": {
+            "still_queued": []
+          }
+        }
+      }
+    },
+    {
+      "t": 4257,
+      "json": {
+        "type": "assistant",
+        "message": {
+          "id": "msg_fake_2",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-sonnet-4-5",
+          "content": [
+            {
+              "type": "text",
+              "text": "This answer will never finish because"
+            }
+          ],
+          "stop_reason": null,
+          "stop_sequence": null,
+          "usage": {
+            "input_tokens": 12,
+            "output_tokens": 1,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0
+          },
+          "context_management": null
+        },
+        "parent_tool_use_id": null,
+        "session_id": "ce776c14-2cb4-4fc9-8a0f-4018f3d6b6c5",
+        "uuid": "2bbdbc6c-4d48-444a-bf9a-47e3063bc45f",
+        "timestamp": "2026-11-12T23:32:31.539Z",
+        "request_id": "req_fake_2",
+        "aborted": true
+      }
+    },
+    {
+      "t": 4296,
+      "json": {
+        "type": "user",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "[Request interrupted by user]"
+            }
+          ]
+        },
+        "parent_tool_use_id": null,
+        "session_id": "ce776c14-2cb4-4fc9-8a0f-4018f3d6b6c5",
+        "uuid": "298dea3a-e72e-4b04-8e2a-17df1eb62f37",
+        "timestamp": "2026-11-12T23:32:31.583Z"
+      }
+    },
+    {
+      "t": 4368,
+      "json": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        "session_id": "ce776c14-2cb4-4fc9-8a0f-4018f3d6b6c5",
+        "parent_tool_use_id": null,
+        "uuid": "ceed6a59-4172-4cb9-828f-72078bae9382",
+        "api_message_id": "msg_fake_2"
+      }
+    },
+    {
+      "t": 4368,
+      "json": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_delta",
+          "context_management": null,
+          "delta": {
+            "container": null,
+            "stop_details": null,
+            "stop_reason": null,
+            "stop_sequence": null
+          },
+          "usage": {
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "input_tokens": 12,
+            "iterations": [],
+            "output_tokens": 1,
+            "server_tool_use": {
+              "web_search_requests": 0,
+              "web_fetch_requests": 0
+            },
+            "fallback_credit": null
+          }
+        },
+        "session_id": "ce776c14-2cb4-4fc9-8a0f-4018f3d6b6c5",
+        "parent_tool_use_id": null,
+        "uuid": "29d3a30b-7e6a-4f75-aee2-5aa6bc007254",
+        "api_message_id": "msg_fake_2"
+      }
+    },
+    {
+      "t": 4368,
+      "json": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_stop"
+        },
+        "session_id": "ce776c14-2cb4-4fc9-8a0f-4018f3d6b6c5",
+        "parent_tool_use_id": null,
+        "uuid": "1fc11431-3fd7-45e0-83ae-107b8f28c7a8",
+        "api_message_id": "msg_fake_2",
+        "abandoned_blocks": {
+          "api_message_id": "msg_fake_2",
+          "from_block_index": 1
+        }
+      }
+    },
+    {
+      "t": 4611,
+      "json": {
+        "duration_api_ms": 0,
+        "stop_reason": null,
+        "session_id": "ce776c14-2cb4-4fc9-8a0f-4018f3d6b6c5",
+        "total_cost_usd": 0,
+        "usage": {
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "output_tokens": 0,
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "",
+          "iterations": [],
+          "speed": "standard",
+          "fallback_credit": null
+        },
+        "modelUsage": {},
+        "permission_denials": [],
+        "terminal_reason": "aborted_streaming",
+        "fast_mode_state": "off",
+        "fast_mode_disabled_reason": "sdk_opt_in_required",
+        "subagent_stats": {
+          "spawned": 0,
+          "requested": {
+            "background": 0,
+            "foreground": 0,
+            "unset": 0
+          },
+          "started_in_background": 0,
+          "max_depth": 0,
+          "spawned_by_subagents": 0,
+          "completed": 0,
+          "failed": 0,
+          "killed": {
+            "parent": 0,
+            "user": 0,
+            "system": 0
+          },
+          "refused": {
+            "depth_limit": 0,
+            "concurrency_limit": 0,
+            "budget": 0
+          },
+          "by_type": {}
+        },
+        "safety_stops": 0,
+        "is_error": true,
+        "num_turns": 2,
+        "subtype": "error_during_execution",
+        "errors": [
+          "[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null"
+        ],
+        "type": "result",
+        "duration_ms": 1076,
+        "uuid": "49d9a890-6a56-4942-a926-253288769589",
+        "queued_turn_count": 0,
+        "result_index": 0,
+        "model_usage_since_last_result": {}
+      }
+    },
+    {
+      "t": 4710,
+      "json": {
+        "type": "system",
+        "subtype": "session_state_changed",
+        "state": "idle",
+        "sdk_host_only": true,
+        "uuid": "8da0ed33-3e6b-480a-b2ad-0ae4ee65d4dd",
+        "session_id": "ce776c14-2cb4-4fc9-8a0f-4018f3d6b6c5"
+      }
+    }
+  ]
+}

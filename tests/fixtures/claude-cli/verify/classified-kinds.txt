@@ -1,0 +1,16 @@
+no credential                claude: expired   deepseek: auth
+token refused 401            claude: expired status 401   deepseek: auth status 401
+403                          claude: expired status 403   deepseek: auth status 403
+402                          claude: billing status 402   deepseek: billing status 402
+404 sdk-ts                   claude: model   deepseek: model
+404 sdk-cli                  claude: model   deepseek: model
+429                          claude: rate status 429   deepseek: rate status 429
+500                          claude: unavailable status 500   deepseek: unavailable status 500
+529                          claude: unavailable status 529   deepseek: unavailable status 529
+400                          claude: unknown status 400   deepseek: unknown status 400
+unreachable                  claude: unavailable   deepseek: unavailable
+resume unknown               claude: session (recoverable)   deepseek: session (recoverable)
+resume not uuid              claude: unknown   deepseek: unknown
+interrupted                  claude: unknown   deepseek: unknown
+exit 1 + stderr              claude: unknown   deepseek: unknown
+exists but failed to launch  claude: unknown   deepseek: unknown

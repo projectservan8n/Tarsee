@@ -1,0 +1,44 @@
+{
+  "name": "real-10-stop",
+  "what": "Stopping the real program while a command it started is still running: through the SDK's AbortSignal, and through Tarsee's killTree(). What the caller sees, and whether the command survives.",
+  "made_with": {
+    "program": "codex 0.167.0 (the real pinned program), started with the argument list, environment and stdin the SDK produced",
+    "platform": "win32"
+  },
+  "sdkAbort": {
+    "how": "runStreamed(input, { signal }) and signal.abort() while the program's own command is running",
+    "eventsBeforeTheStop": [
+      "thread.started",
+      "item.completed",
+      "turn.started",
+      "item.started:command_execution"
+    ],
+    "commandWasRunningBeforeTheStop": {
+      "moved": true,
+      "hadAny": true
+    },
+    "abortAt_ms": 3441,
+    "iterationEndedAt_ms": 3472,
+    "sdkThrew": {
+      "name": "AbortError",
+      "message": "The operation was aborted",
+      "code": "ABORT_ERR"
+    },
+    "commandStillRunningAfterwards": false
+  },
+  "killTree": {
+    "how": "killTree(child): taskkill /pid <pid> /T /F",
+    "commandWasRunningBeforeTheStop": {
+      "moved": true,
+      "hadAny": true
+    },
+    "killTreeCalledAt_ms": 3350,
+    "killTreeResolvedAt_ms": 3605,
+    "exit": {
+      "code": 1,
+      "signal": null,
+      "at_ms": 3604
+    },
+    "commandStillRunningAfterwards": false
+  }
+}

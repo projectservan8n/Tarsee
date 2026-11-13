@@ -1,0 +1,126 @@
+// Real CLI, driven directly: a few remaining questions.
+//   oauth     the plan's sign-in variable (a fake CLAUDE_CODE_OAUTH_TOKEN) turned down with 401 by the fake API
+//   mcpfile   --mcp-config <file>, the file deleted as soon as system/init arrives: do later tool calls still work?
+//   mcpver    an MCP server that answers initialize with an older protocol version
+//   stderr    what --debug-file / stderr carry on a normal run (nothing expected)
+import { drive, cleanEnv, gatewayEnv, baseArgs, initRequest, userText, startFakeAnthropic, SCRATCH } from "./real-drive.mjs";
+import fs from "node:fs";
+import http from "node:http";
+import net from "node:net";
+
+fs.mkdirSync(`${SCRATCH}/real`, { recursive: true });
+const which = (process.argv[2] || "all").split(",");
+const want = (k) => which.includes("all") || which.includes(k);
+const SS = { CLAUDE_CODE_SDK_READS_SESSION_STATE: "1" };
+const stdin0 = (text = "say hi") => [initRequest({ systemPrompt: ["You are a test."], systemPromptSnapshot: false }), userText(text)];
+const TOKEN = "tarsee-mcp-" + "test-token-0123456789abcdef";
+const hasToolResult = (body) => { const last = [...(body?.messages || [])].reverse().find((m) => m.role === "user"); return Array.isArray(last?.content) && last.content.some((b) => b.type === "tool_result"); };
+const toolNames = (body) => (body?.tools || []).map((x) => x.name);
+
+async function startTrapProxy() {
+  const connects = [];
+  const server = net.createServer((sock) => { sock.on("error", () => {}); sock.once("data", (d) => { connects.push(String(d).split("\r\n")[0]); sock.end("HTTP/1.1 403 Forbidden\r\n\r\n"); }); });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return { url: `http://127.0.0.1:${server.address().port}`, connects, close: () => new Promise((r) => server.close(() => r())) };
+}
+
+if (want("oauth")) {
+  const trap = await startTrapProxy();
+  const fake = await startFakeAnthropic({ script: () => ({ status: 401, error: { type: "authentication_error", message: "OAuth token has expired. Please obtain a new token or refresh your existing token." } }) });
+  try {
+    const r = await drive({
+      name: "08-oauth-token-rejected", args: baseArgs(), cwd: `${SCRATCH}/ws/oauth`, stdin: stdin0(), timeoutMs: 90_000,
+      env: cleanEnv(`${SCRATCH}/homes/oauth`, { ...SS, CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-" + "oat01-test-not-a-token-000000", ANTHROPIC_BASE_URL: fake.url, HTTPS_PROXY: trap.url, HTTP_PROXY: trap.url, NO_PROXY: "127.0.0.1,localhost", CLAUDE_CODE_ENTRYPOINT: "sdk-ts" }),
+    });
+    const msgs = r.stdout.map((o) => o.msg).filter(Boolean);
+    const init = msgs.find((m) => m.type === "system" && m.subtype === "init");
+    console.log(`\n===== a sign-in token the API turns down with 401: exit ${r.exitCode}; stderr ${JSON.stringify(r.stderr.slice(0, 400))}`);
+    console.log("  apiKeySource:", init?.apiKeySource);
+    for (const m of msgs) {
+      if (m.type === "assistant") console.log(`  < assistant error=${m.error} api_error_status=${m.api_error_status} text=${JSON.stringify(m.message.content.map((b) => b.text).join(""))}`);
+      if (m.type === "result") console.log(`  < result subtype=${m.subtype} is_error=${m.is_error} api_error_status=${m.api_error_status} result=${JSON.stringify(m.result)} errors=${JSON.stringify(m.errors)}`);
+    }
+    console.log("  fake API saw:", fake.requests.map((q) => `${q.method} ${q.path} auth=${q.headers.authorization ? "Bearer <token>" : "-"} x-api-key=${q.headers["x-api-key"] ? "yes" : "-"}`).join(" | "));
+    console.log("  proxy trap saw:", JSON.stringify(trap.connects));
+  } finally { await fake.close(); await trap.close(); }
+}
+
+async function startMcp({ fixedVersion = null } = {}) {
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    let raw = "";
+    req.on("data", (c) => { raw += c; });
+    req.on("end", () => {
+      let body = null; try { body = raw ? JSON.parse(raw) : null; } catch { body = raw; }
+      const entry = { method: req.method, path: req.url, headers: { ...req.headers }, body };
+      requests.push(entry);
+      if (req.headers.authorization !== `Bearer ${TOKEN}`) { res.writeHead(401, { "content-type": "application/json" }); res.end("{}"); return; }
+      if (req.method !== "POST") { res.writeHead(405, { allow: "POST" }); res.end(); return; }
+      const reply = (result) => { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ jsonrpc: "2.0", id: body.id, result })); };
+      if (body?.method === "initialize") return reply({ protocolVersion: fixedVersion || body.params?.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "tarsee", version: "1.0.0" } });
+      if (body?.method === "tools/list") return reply({ tools: [{ name: "tarsee_datetime", description: "Get the time.", inputSchema: { type: "object", properties: { timezone: { type: "string" } } } }] });
+      if (body?.method === "tools/call") return reply({ content: [{ type: "text", text: "2026-11-13T00:00:00Z" }] });
+      if (body && body.id === undefined) { res.writeHead(202); res.end(); return; }
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32000, message: "Bad Request" } }));
+    });
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  return { url: `http://127.0.0.1:${server.address().port}/mcp`, requests, close: () => { server.closeAllConnections?.(); return new Promise((r) => server.close(() => r())); } };
+}
+const mcpSummary = [];
+const mcpScript = (req) => (hasToolResult(req.body) ? { text: "The time is noted." } : toolNames(req.body).includes("mcp__tarsee__tarsee_datetime") ? { toolUse: { id: "toolu_mcp_1", name: "mcp__tarsee__tarsee_datetime", input: { timezone: "UTC" } } } : { text: "No tarsee tool was offered." });
+
+if (want("mcpfile")) {
+  const mcp = await startMcp();
+  const fake = await startFakeAnthropic({ script: mcpScript });
+  try {
+    const file = `${SCRATCH}/real/mcp-config-deleted.json`;
+    fs.writeFileSync(file, JSON.stringify({ mcpServers: { tarsee: { type: "http", url: mcp.url, headers: { Authorization: `Bearer ${TOKEN}` }, alwaysLoad: true } } }));
+    let deletedAt = null;
+    const r = await drive({
+      name: "08-mcp-config-file-deleted", args: baseArgs({ extra: ["--mcp-config", file.replaceAll("/", "\\")] }), cwd: `${SCRATCH}/ws/mcpfile`, stdin: stdin0("what time is it?"), timeoutMs: 90_000,
+      env: gatewayEnv(`${SCRATCH}/homes/mcpfile`, fake.url, SS),
+      onMessage(m, api) { if (m.type === "system" && m.subtype === "init" && deletedAt == null) { fs.rmSync(file); deletedAt = api.t(); } },
+    });
+    const msgs = r.stdout.map((o) => o.msg).filter(Boolean);
+    console.log(`\n===== --mcp-config <file>, the file deleted at ${deletedAt} ms when system/init arrived: exit ${r.exitCode}; stderr ${JSON.stringify(r.stderr.slice(0, 300))}`);
+    console.log("  init.mcp_servers:", JSON.stringify(msgs.find((m) => m.type === "system" && m.subtype === "init")?.mcp_servers));
+    for (const m of msgs) if (m.type === "user" || m.type === "result") console.log(`  < ${m.type} ${JSON.stringify(m.message?.content ?? m.result).slice(0, 300)}`);
+    console.log("  MCP requests:", mcp.requests.map((q) => `${q.method} ${q.body?.method || ""}`).join(" | "));
+    mcpSummary.push({
+      case: "--mcp-config <path of a JSON file>; the file is deleted as soon as system/init arrives, before the tool call",
+      file_deleted_at_ms: deletedAt, exit_code: r.exitCode,
+      system_init_mcp_servers: msgs.find((m) => m.type === "system" && m.subtype === "init")?.mcp_servers,
+      tool_result_on_stdout: msgs.find((m) => m.type === "user")?.message?.content,
+      result: msgs.find((m) => m.type === "result")?.result,
+      requests_the_server_received: mcp.requests.map((q) => `${q.method} ${q.body?.method || ""}`.trim()),
+    });
+  } finally { await fake.close(); await mcp.close(); }
+}
+
+if (want("mcpver")) {
+  for (const v of ["2025-06-18", "2024-11-05"]) {
+    const mcp = await startMcp({ fixedVersion: v });
+    const fake = await startFakeAnthropic({ script: mcpScript });
+    try {
+      const r = await drive({
+        name: `08-mcp-version-${v}`, args: baseArgs({ extra: ["--mcp-config", JSON.stringify({ mcpServers: { tarsee: { type: "http", url: mcp.url, headers: { Authorization: `Bearer ${TOKEN}` }, alwaysLoad: true } } })] }),
+        cwd: `${SCRATCH}/ws/mcpver`, stdin: stdin0("what time is it?"), timeoutMs: 90_000, env: gatewayEnv(`${SCRATCH}/homes/mcpver`, fake.url, SS),
+      });
+      const msgs = r.stdout.map((o) => o.msg).filter(Boolean);
+      console.log(`\n===== the server answers initialize with protocolVersion ${v}: exit ${r.exitCode}`);
+      console.log("  init.mcp_servers:", JSON.stringify(msgs.find((m) => m.type === "system" && m.subtype === "init")?.mcp_servers));
+      console.log("  result:", JSON.stringify(msgs.find((m) => m.type === "result")?.result));
+      console.log("  MCP requests:", mcp.requests.map((q) => `${q.method} ${q.body?.method || ""} [mcp-protocol-version: ${q.headers["mcp-protocol-version"] || "-"}]`).join(" | "));
+      mcpSummary.push({
+        case: `the server answers initialize with protocolVersion ${v} (the program asked for 2025-11-25)`,
+        exit_code: r.exitCode,
+        system_init_mcp_servers: msgs.find((m) => m.type === "system" && m.subtype === "init")?.mcp_servers,
+        result: msgs.find((m) => m.type === "result")?.result,
+        requests_the_server_received: mcp.requests.map((q) => ({ request: `${q.method} ${q.body?.method || ""}`.trim(), mcp_protocol_version_header: q.headers["mcp-protocol-version"] || null })),
+      });
+    } finally { await fake.close(); await mcp.close(); }
+  }
+}
+if (mcpSummary.length) fs.writeFileSync(`${SCRATCH}/real/08-mcp-summary.json`, JSON.stringify(mcpSummary, null, 2));

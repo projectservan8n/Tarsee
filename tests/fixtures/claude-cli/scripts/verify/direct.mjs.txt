@@ -1,0 +1,25 @@
+// The real SDK called directly (no Tarsee code), the stream read to its very end, to see what it throws.
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+const SCRATCH = process.env.VERIFY_SCRATCH;
+const sdk = await import(pathToFileURL(`${process.env.TARSEE_NODE_PROJECT}/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs`).href);
+const STUB = path.join(SCRATCH, "stub", "fake-claude.exe").replace(/\//g, "\\");
+const base = {}; for (const k of ["PATH", "PATHEXT", "SystemRoot", "SystemDrive", "COMSPEC", "TEMP", "TMP", "windir"]) if (process.env[k]) base[k] = process.env[k];
+async function go(name, scenario, extraOpts = {}, extraEnv = {}) {
+  const out = path.join(SCRATCH, "out", `direct-${name}.stub.jsonl`); fs.rmSync(out, { force: true });
+  const seen = []; let err = null;
+  try {
+    for await (const m of sdk.query({ prompt: "hi", options: { pathToClaudeCodeExecutable: STUB, cwd: path.join(SCRATCH, "ws"), env: { ...base, VSTUB_OUT: out, VSTUB_SCENARIO: scenario, ...extraEnv }, ...extraOpts } })) seen.push(m.type + (m.subtype ? "/" + m.subtype : ""));
+  } catch (e) { err = `${e.name}: ${e.message}`; }
+  const stub = fs.existsSync(out) ? fs.readFileSync(out, "utf8").trim().split("\n").map((l) => JSON.parse(l)) : [];
+  console.log(`--- ${name}\n  seen: ${seen.join(" ")}\n  thrown: ${err}\n  argv: ${JSON.stringify(stub[0]?.argv)}`);
+  return stub;
+}
+await go("error-result", "error-result");
+await go("api-error-result", "api-error-result");
+await go("turn-minimal-options", "turn");
+process.env.DEBUG_CLAUDE_AGENT_SDK = "1";
+const s = await go("debug-env", "turn", {}, { DEBUG_CLAUDE_AGENT_SDK: "1", DEBUG: "canary" });
+console.log("  DEBUG in child:", JSON.stringify(s[0]?.env?.DEBUG));
+process.exit(0);

@@ -1,0 +1,10 @@
+stdout: control_response success
+stdout: system init
+  "mcp_servers":[{"name":"tarsee","status":"failed","source":"dynamic"}]
+stdout: system status
+stdout: assistant 
+stdout: result success
+  is_error: true
+  "result":"API Error: Connection refused — a firewall or proxy may be blocking it (ECONNREFUSED)","type":"res
+exit code: Some(1)
+stderr: "[claude-code:unrecognized_model] {\"model\":\"deepseek-flash[1m]\",\"query_source\":\"sdk\"}\n"

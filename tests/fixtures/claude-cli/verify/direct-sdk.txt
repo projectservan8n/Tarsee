@@ -1,0 +1,19 @@
+--- error-result
+  seen: system/init result/error_during_execution
+  thrown: Error: Claude Code returned an error result: first thing went wrong; second thing
+  argv: ["--output-format","stream-json","--verbose","--input-format","stream-json"]
+--- api-error-result
+  seen: system/init assistant result/success
+  thrown: Error: Claude Code returned an error result: API Error: 529 Overloaded.
+  argv: ["--output-format","stream-json","--verbose","--input-format","stream-json"]
+--- turn-minimal-options
+  seen: system/init stream_event stream_event stream_event assistant stream_event stream_event stream_event result/success
+  thrown: null
+  argv: ["--output-format","stream-json","--verbose","--input-format","stream-json"]
+--- debug-env
+  seen: system/init stream_event stream_event stream_event assistant stream_event stream_event stream_event result/success
+  thrown: null
+  argv: ["--output-format","stream-json","--verbose","--input-format","stream-json"]
+  DEBUG in child: "1"
+SDK debug logs: <SCRATCH>\dbghome\debug\sdk-<uuid>.txt
+["--output-format","stream-json","--verbose","--input-format","stream-json","--debug-file=<SCRATCH>\\dbghome\\debug\\sdk-<uuid>.txt"] DEBUG= undefined DEBUG_CLAUDE_AGENT_SDK= undefined

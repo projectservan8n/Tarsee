@@ -1,0 +1,20 @@
+{
+  "description": "Where the program kept the two-turn session of turn-bash-tool-call.json and turn-resumed-session.json. CLAUDE_CONFIG_DIR was <HOME>\\.claude. <SCRATCH_AS_FOLDER_NAME> is <SCRATCH> with every character that is not a letter or digit replaced by '-', like the rest of the name.",
+  "working_folder": "<SCRATCH>\\ws\\session ws.dir_1",
+  "project_folder_name": "<SCRATCH_AS_FOLDER_NAME>-ws-session-ws-dir-1",
+  "config_folder_after_the_second_turn": [
+    ".claude.json",
+    "backups/",
+    "  .claude.json.backup.<time>",
+    "plugins/",
+    "  store/",
+    "    cc-plugin-agents-md_builtin-b049b47b3618.json",
+    "projects/",
+    "  <SCRATCH_AS_FOLDER_NAME>-ws-session-ws-dir-1/",
+    "    420992f3-2e37-47ef-8d10-e0d2f18c0199.jsonl",
+    "session-env/",
+    "  420992f3-2e37-47ef-8d10-e0d2f18c0199/",
+    "sessions/",
+    "shell-snapshots/"
+  ]
+}

@@ -1,0 +1,115 @@
+// Two tiny loopback stand-ins, written for the verification pass: a Messages API that streams scripted replies,
+// and a logging MCP server over HTTP. Both record every request they get.
+import http from "node:http";
+
+const readBody = (req) => new Promise((res) => { const ch = []; req.on("data", (c) => ch.push(c)); req.on("end", () => res(Buffer.concat(ch).toString("utf8"))); });
+
+/**
+ * A stand-in for POST /v1/messages. `script` is a list of replies used in order (the last one repeats):
+ *   { text: "words", delayMs?, chunks? }         a text reply (streamed in `chunks` pieces, `delayMs` apart)
+ *   { tool: { id, name, input } }                a tool_use reply
+ *   { status: 529, error: { type, message } }    an error answer
+ *   { hang: true }                               headers and message_start, then nothing
+ */
+export async function startFakeApi(script) {
+  const requests = [];
+  let n = 0;
+  const server = http.createServer(async (req, res) => {
+    const body = await readBody(req);
+    let json = null; try { json = JSON.parse(body); } catch { /* not JSON */ }
+    const entry = { t: Date.now(), method: req.method, url: req.url, headers: req.headers, body: json ?? body };
+    requests.push(entry);
+    if (req.method !== "POST" || !req.url.startsWith("/v1/messages") || req.url.includes("count_tokens")) {
+      res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ type: "error", error: { type: "not_found_error", message: "not here" } })); return;
+    }
+    const step = script[Math.min(n, script.length - 1)]; n++;
+    entry.script_step = n;
+    if (step.status) { res.writeHead(step.status, { "content-type": "application/json", "request-id": `req_fake_${n}` }); res.end(JSON.stringify({ type: "error", error: step.error })); return; }
+    const id = `msg_fake_${n}`;
+    const model = json?.model || "fake-model";
+    if (!json?.stream) {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ id, type: "message", role: "assistant", model, content: [{ type: "text", text: step.text ?? "ok" }], stop_reason: "end_turn", stop_sequence: null, usage: { input_tokens: 7, output_tokens: 3 } }));
+      return;
+    }
+    res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", "request-id": `req_fake_${n}` });
+    const send = (type, data) => res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`);
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    send("message_start", { message: { id, type: "message", role: "assistant", model, content: [], stop_reason: null, stop_sequence: null, usage: step.startUsage ?? { input_tokens: 11, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 1 } } });
+    if (step.hang) return;
+    if (step.thinking) {
+      // a thinking block first (index 0), then the words (index 1)
+      send("content_block_start", { index: 0, content_block: { type: "thinking", thinking: "", signature: "" } });
+      send("content_block_delta", { index: 0, delta: { type: "thinking_delta", thinking: step.thinking } });
+      send("content_block_delta", { index: 0, delta: { type: "signature_delta", signature: "made-up-signature" } });
+      send("content_block_stop", { index: 0 });
+      send("content_block_start", { index: 1, content_block: { type: "text", text: "" } });
+      send("content_block_delta", { index: 1, delta: { type: "text_delta", text: step.text ?? "ok" } });
+      send("content_block_stop", { index: 1 });
+      send("message_delta", { delta: { stop_reason: "end_turn", stop_sequence: null }, usage: step.deltaUsage ?? { output_tokens: 6 } });
+      send("message_stop", {});
+      res.end();
+      return;
+    }
+    if (step.tool) {
+      send("content_block_start", { index: 0, content_block: { type: "tool_use", id: step.tool.id, name: step.tool.name, input: {} } });
+      send("content_block_delta", { index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify(step.tool.input) } });
+      send("content_block_stop", { index: 0 });
+      send("message_delta", { delta: { stop_reason: "tool_use", stop_sequence: null }, usage: { output_tokens: 9 } });
+    } else {
+      const text = step.text ?? "ok";
+      const k = step.chunks ?? 2;
+      send("content_block_start", { index: 0, content_block: { type: "text", text: "" } });
+      for (let i = 0; i < k; i++) {
+        if (step.delayMs) await sleep(step.delayMs);
+        if (res.destroyed) return;
+        send("content_block_delta", { index: 0, delta: { type: "text_delta", text: text.slice(Math.floor((i * text.length) / k), Math.floor(((i + 1) * text.length) / k)) } });
+      }
+      send("content_block_stop", { index: 0 });
+      send("message_delta", { delta: { stop_reason: "end_turn", stop_sequence: null }, usage: step.deltaUsage ?? { output_tokens: 6 } });
+    }
+    send("message_stop", {});
+    res.end();
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  return { url: `http://127.0.0.1:${server.address().port}`, port: server.address().port, requests, close: () => new Promise((r) => { server.closeAllConnections?.(); server.close(r); }) };
+}
+
+/**
+ * A logging MCP server (streamable HTTP, JSON answers). opts: token (required bearer), discover ("400" | "rpc-error"),
+ * sessionId (hand one out on initialize), protocol (answer initialize with this version instead of the one asked for).
+ */
+export async function startMcp({ token = null, discover = "rpc-error", sessionId = null, protocol = null, failCall = null } = {}) {
+  const requests = [];
+  const server = http.createServer(async (req, res) => {
+    const body = await readBody(req);
+    let json = null; try { json = JSON.parse(body); } catch { /* none */ }
+    const entry = { t: Date.now(), method: req.method, url: req.url, headers: req.headers, body: json ?? (body || null) };
+    requests.push(entry);
+    const reply = (status, obj, headers = {}) => { entry.answer = { status, body: obj ?? null, headers }; res.writeHead(status, obj == null ? headers : { "content-type": "application/json", ...headers }); res.end(obj == null ? undefined : JSON.stringify(obj)); };
+    if (token && req.headers.authorization !== `Bearer ${token}`) return reply(401, { jsonrpc: "2.0", id: null, error: { code: -32001, message: "Unauthorized" } });
+    if (req.method === "GET") return reply(405, null, { allow: "POST" });
+    if (req.method === "DELETE") return reply(200, null);
+    if (req.method !== "POST" || !json) return reply(400, { jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } });
+    const { id, method } = json;
+    if (method === "server/discover") {
+      if (discover === "400") return reply(400, { jsonrpc: "2.0", id: null, error: { code: -32000, message: "Unsupported protocol version" } });
+      return reply(200, { jsonrpc: "2.0", id, error: { code: -32601, message: "Method not found" } });
+    }
+    if (method === "initialize") return reply(200, { jsonrpc: "2.0", id, result: { protocolVersion: protocol || json.params?.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "verify-mcp", version: "0.0.1" } } }, sessionId ? { "mcp-session-id": sessionId } : {});
+    if (method === "notifications/initialized") return reply(202, null);
+    if (method === "tools/list") return reply(200, { jsonrpc: "2.0", id, result: { tools: [
+      { name: "echo", description: "Echo the text back.", inputSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] } },
+      { name: "second_tool", description: "A second tool.", inputSchema: { type: "object", properties: {} } },
+    ] } });
+    if (method === "tools/call") {
+      if (failCall === "isError") return reply(200, { jsonrpc: "2.0", id, result: { isError: true, content: [{ type: "text", text: "the tool says no" }] } });
+      if (failCall === "rpc") return reply(200, { jsonrpc: "2.0", id, error: { code: -32000, message: "rpc level failure" } });
+      return reply(200, { jsonrpc: "2.0", id, result: { content: [{ type: "text", text: `echo: ${json.params?.arguments?.text ?? ""}` }] } });
+    }
+    if (id === undefined) return reply(202, null);
+    return reply(200, { jsonrpc: "2.0", id, error: { code: -32601, message: "Method not found" } });
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  return { url: `http://127.0.0.1:${server.address().port}/mcp`, port: server.address().port, requests, close: () => new Promise((r) => { server.closeAllConnections?.(); server.close(r); }) };
+}

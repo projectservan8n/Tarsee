@@ -1,0 +1,305 @@
+{
+  "name": "other-06-tarsee-mcp-endpoint",
+  "what": "The answers of Tarsee's own MCP endpoint (Node version, src/ai/mcp-http.js) to codex's three start-of-turn requests, replayed with codex's headers; then a wrong token, a GET, and a request after the grant was revoked.",
+  "made_with": {
+    "endpoint": "src/ai/mcp-http.js startMcpHttp() + grantTurn()",
+    "platform": "win32"
+  },
+  "initialize": {
+    "request": {
+      "method": "POST",
+      "headers": {
+        "user-agent": "codex-mcp-client/0.167.0",
+        "accept": "text/event-stream, application/json",
+        "content-type": "application/json",
+        "authorization": "Bearer <MCP_TOKEN>"
+      },
+      "body": {
+        "jsonrpc": "2.0",
+        "id": 0,
+        "method": "initialize",
+        "params": {
+          "protocolVersion": "2025-06-18",
+          "capabilities": {
+            "elicitation": {
+              "form": {},
+              "url": {}
+            }
+          },
+          "clientInfo": {
+            "name": "codex-mcp-client",
+            "title": "Codex",
+            "version": "0.167.0"
+          }
+        }
+      }
+    },
+    "answer": {
+      "status": 200,
+      "headers": {
+        "connection": "keep-alive",
+        "content-length": "161",
+        "content-type": "application/json",
+        "date": "Thu, 12 Nov 2026 23:55:53 GMT",
+        "keep-alive": "timeout=5"
+      },
+      "body": {
+        "result": {
+          "protocolVersion": "2025-06-18",
+          "capabilities": {
+            "tools": {
+              "listChanged": true
+            }
+          },
+          "serverInfo": {
+            "name": "tarsee",
+            "version": "1.0.0"
+          }
+        },
+        "jsonrpc": "2.0",
+        "id": 0
+      }
+    }
+  },
+  "initialized": {
+    "request": {
+      "method": "POST",
+      "headers": {
+        "user-agent": "codex-mcp-client/0.167.0",
+        "accept": "text/event-stream, application/json",
+        "content-type": "application/json",
+        "authorization": "Bearer <MCP_TOKEN>",
+        "mcp-protocol-version": "2025-06-18"
+      },
+      "body": {
+        "jsonrpc": "2.0",
+        "method": "notifications/initialized"
+      }
+    },
+    "answer": {
+      "status": 202,
+      "headers": {
+        "connection": "keep-alive",
+        "date": "Thu, 12 Nov 2026 23:55:53 GMT",
+        "keep-alive": "timeout=5",
+        "transfer-encoding": "chunked"
+      },
+      "body": ""
+    }
+  },
+  "toolsList": {
+    "request": {
+      "method": "POST",
+      "headers": {
+        "user-agent": "codex-mcp-client/0.167.0",
+        "accept": "text/event-stream, application/json",
+        "content-type": "application/json",
+        "authorization": "Bearer <MCP_TOKEN>",
+        "mcp-protocol-version": "2025-06-18"
+      },
+      "body": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list",
+        "params": {
+          "_meta": {
+            "progressToken": 0
+          }
+        }
+      }
+    },
+    "answer": {
+      "status": 200,
+      "headers": {
+        "connection": "keep-alive",
+        "content-length": "30447",
+        "content-type": "application/json",
+        "date": "Thu, 12 Nov 2026 23:55:53 GMT",
+        "keep-alive": "timeout=5"
+      },
+      "body": {
+        "result": {
+          "tools": [
+            {
+              "name": "tarsee_send_message",
+              "description": "Send a message to a channel (Telegram, Discord, WhatsApp, Slack, email, or web chat). Use this to proactively notify the user. For email, channel_id MUST be the target address; for threaded email replies with In-Reply-To headers, use tarsee_send_email_thread instead.",
+              "inputSchema": {
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "properties": {
+                  "channel": {
+                    "type": "string",
+                    "enum": [
+                      "telegram",
+                      "discord",
+                      "whatsapp",
+                      "slack",
+                      "email",
+                      "web"
+                    ],
+                    "description": "Channel to send to"
+                  },
+                  "message": {
+                    "type": "string",
+                    "description": "Message text"
+                  },
+                  "channel_id": {
+                    "description": "Specific chat/channel ID (auto-resolved if omitted — required for email)",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "channel",
+                  "message"
+                ]
+              },
+              "execution": {
+                "taskSupport": "forbidden"
+              }
+            },
+            {
+              "(capture note)": "26 more tools, same shape",
+              "names": [
+                "tarsee_send_file",
+                "tarsee_configure_email_channel",
+                "tarsee_send_email_thread",
+                "tarsee_schedule_task",
+                "tarsee_remember",
+                "tarsee_daily_log",
+                "tarsee_read_file",
+                "tarsee_write_file",
+                "tarsee_search_memories",
+                "tarsee_search_memories_deep",
+                "tarsee_create_canvas",
+                "tarsee_create_diagram",
+                "tarsee_datetime",
+                "tarsee_calculator",
+                "tarsee_discord_admin",
+                "tarsee_railway",
+                "tarsee_browser",
+                "tarsee_web_fetch",
+                "tarsee_web_search",
+                "tarsee_pdf_read",
+                "tarsee_get_key",
+                "tarsee_set_key",
+                "tarsee_list_keys",
+                "tarsee_delete_key",
+                "tarsee_list_files",
+                "tarsee_push_notification"
+              ]
+            }
+          ]
+        },
+        "jsonrpc": "2.0",
+        "id": 1
+      }
+    }
+  },
+  "wrongToken": {
+    "request": {
+      "method": "POST",
+      "headers": {
+        "user-agent": "codex-mcp-client/0.167.0",
+        "accept": "text/event-stream, application/json",
+        "content-type": "application/json",
+        "authorization": "Bearer wrong",
+        "mcp-protocol-version": "2025-06-18"
+      },
+      "body": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/list"
+      }
+    },
+    "answer": {
+      "status": 401,
+      "headers": {
+        "cache-control": "no-store",
+        "connection": "keep-alive",
+        "content-type": "application/json",
+        "date": "Thu, 12 Nov 2026 23:55:53 GMT",
+        "keep-alive": "timeout=5",
+        "transfer-encoding": "chunked",
+        "www-authenticate": "Bearer realm=\"tarsee\""
+      },
+      "body": {
+        "jsonrpc": "2.0",
+        "error": {
+          "code": -32000,
+          "message": "This needs a live grant's token."
+        },
+        "id": null
+      }
+    }
+  },
+  "getInsteadOfPost": {
+    "request": {
+      "method": "GET",
+      "headers": {
+        "user-agent": "codex-mcp-client/0.167.0",
+        "accept": "text/event-stream, application/json",
+        "content-type": "application/json",
+        "authorization": "Bearer <MCP_TOKEN>",
+        "mcp-protocol-version": "2025-06-18"
+      },
+      "body": null
+    },
+    "answer": {
+      "status": 405,
+      "headers": {
+        "allow": "POST",
+        "cache-control": "no-store",
+        "connection": "keep-alive",
+        "content-type": "application/json",
+        "date": "Thu, 12 Nov 2026 23:55:53 GMT",
+        "keep-alive": "timeout=5",
+        "transfer-encoding": "chunked"
+      },
+      "body": {
+        "jsonrpc": "2.0",
+        "error": {
+          "code": -32000,
+          "message": "Only POST is served here."
+        },
+        "id": null
+      }
+    }
+  },
+  "afterTheGrantWasRevoked": {
+    "request": {
+      "method": "POST",
+      "headers": {
+        "user-agent": "codex-mcp-client/0.167.0",
+        "accept": "text/event-stream, application/json",
+        "content-type": "application/json",
+        "authorization": "Bearer <MCP_TOKEN>",
+        "mcp-protocol-version": "2025-06-18"
+      },
+      "body": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/list"
+      }
+    },
+    "answer": {
+      "status": 401,
+      "headers": {
+        "cache-control": "no-store",
+        "connection": "keep-alive",
+        "content-type": "application/json",
+        "date": "Thu, 12 Nov 2026 23:55:53 GMT",
+        "keep-alive": "timeout=5",
+        "transfer-encoding": "chunked",
+        "www-authenticate": "Bearer realm=\"tarsee\""
+      },
+      "body": {
+        "jsonrpc": "2.0",
+        "error": {
+          "code": -32000,
+          "message": "This needs a live grant's token."
+        },
+        "id": null
+      }
+    }
+  }
+}

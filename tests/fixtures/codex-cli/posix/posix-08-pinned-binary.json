@@ -1,0 +1,75 @@
+{
+  "name": "posix-08-pinned-binary",
+  "what": "No codexPathOverride on Linux: the SDK starts vendor/<triple>/bin/codex of the platform package (@openai/codex-linux-x64) and puts vendor/<triple>/codex-path first on PATH, joined with a colon. Run against a byte-for-byte copy of the SDK's file in a made-up node_modules whose binary is the stub.",
+  "made_with": {
+    "sdk": "@openai/codex-sdk 0.167.0, called directly",
+    "platform": "linux (WSL)",
+    "node": "v22.22.2"
+  },
+  "programTheSdkStarted": "<NODE_MODULES>/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex",
+  "sdk": {
+    "new Codex(options)": {
+      "env": {
+        "FROM_ENV_OPTION": "the env option",
+        "PATH": "/usr/bin:/bin"
+      }
+    },
+    "callerProcessEnvNames": [
+      "FROM_PROCESS_ENV",
+      "PATH",
+      "TARSEE_STATE_DIR"
+    ]
+  },
+  "child": {
+    "argv": [
+      "exec",
+      "--experimental-json"
+    ],
+    "cwd": "<CALLER_CWD>",
+    "envNames": [
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+      "FROM_ENV_OPTION",
+      "PATH"
+    ],
+    "envValues": {
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE": "codex_sdk_ts",
+      "FROM_ENV_OPTION": "the env option",
+      "PATH": "<NODE_MODULES>/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex-path:/usr/bin:/bin"
+    },
+    "processGroup": {
+      "sameGroupAsTheCaller": true,
+      "sameSessionAsTheCaller": true,
+      "isItsOwnGroupLeader": false
+    },
+    "stdin": {
+      "chunks": [
+        {
+          "at_ms": 1,
+          "bytes": 5
+        }
+      ],
+      "eof_at_ms": 2,
+      "bytes": 5,
+      "text": "hello"
+    }
+  },
+  "stub": {
+    "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"01a1c000-0000-7000-8000-0000000000cc\"}\n{\"type\":\"turn.started\"}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":10,\"cached_input_tokens\":0,\"output_tokens\":2,\"reasoning_output_tokens\":0}}\n",
+    "stderr": "",
+    "exitCode": 0,
+    "staysAliveMs": 0,
+    "ignoresSignals": false
+  },
+  "sdkYielded": [
+    "thread.started",
+    "turn.started",
+    "item.completed",
+    "turn.completed"
+  ],
+  "sdkThrew": null,
+  "timing": {
+    "iterationEndedAt_ms": 44
+  },
+  "signalsTheStubReceived": [],
+  "stubStillRunningAfterwards": false
+}

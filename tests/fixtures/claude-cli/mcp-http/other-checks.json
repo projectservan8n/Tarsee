@@ -1,0 +1,114 @@
+{
+  "description": "Two more questions about the HTTP server config, each answered with the real program: can the config file be deleted once the program has started, and may the server answer an older protocol version.",
+  "cases": [
+    {
+      "case": "--mcp-config <path of a JSON file>; the file is deleted as soon as system/init arrives, before the tool call",
+      "file_deleted_at_ms": 885,
+      "exit_code": 0,
+      "system_init_mcp_servers": [
+        {
+          "name": "tarsee",
+          "status": "connected",
+          "source": "dynamic"
+        }
+      ],
+      "tool_result_on_stdout": [
+        {
+          "tool_use_id": "toolu_mcp_1",
+          "type": "tool_result",
+          "content": [
+            {
+              "type": "text",
+              "text": "2026-11-13T00:00:00Z"
+            }
+          ]
+        }
+      ],
+      "result": "The time is noted.",
+      "requests_the_server_received": [
+        "POST server/discover",
+        "POST initialize",
+        "POST notifications/initialized",
+        "GET",
+        "POST tools/list",
+        "POST tools/call"
+      ]
+    },
+    {
+      "case": "the server answers initialize with protocolVersion 2025-06-18 (the program asked for 2025-11-25)",
+      "exit_code": 0,
+      "system_init_mcp_servers": [
+        {
+          "name": "tarsee",
+          "status": "connected",
+          "source": "dynamic"
+        }
+      ],
+      "result": "The time is noted.",
+      "requests_the_server_received": [
+        {
+          "request": "POST server/discover",
+          "mcp_protocol_version_header": "2026-07-28"
+        },
+        {
+          "request": "POST initialize",
+          "mcp_protocol_version_header": null
+        },
+        {
+          "request": "POST notifications/initialized",
+          "mcp_protocol_version_header": "2025-06-18"
+        },
+        {
+          "request": "GET",
+          "mcp_protocol_version_header": "2025-06-18"
+        },
+        {
+          "request": "POST tools/list",
+          "mcp_protocol_version_header": "2025-06-18"
+        },
+        {
+          "request": "POST tools/call",
+          "mcp_protocol_version_header": "2025-06-18"
+        }
+      ]
+    },
+    {
+      "case": "the server answers initialize with protocolVersion 2024-11-05 (the program asked for 2025-11-25)",
+      "exit_code": 0,
+      "system_init_mcp_servers": [
+        {
+          "name": "tarsee",
+          "status": "connected",
+          "source": "dynamic"
+        }
+      ],
+      "result": "The time is noted.",
+      "requests_the_server_received": [
+        {
+          "request": "POST server/discover",
+          "mcp_protocol_version_header": "2026-07-28"
+        },
+        {
+          "request": "POST initialize",
+          "mcp_protocol_version_header": null
+        },
+        {
+          "request": "POST notifications/initialized",
+          "mcp_protocol_version_header": "2024-11-05"
+        },
+        {
+          "request": "GET",
+          "mcp_protocol_version_header": "2024-11-05"
+        },
+        {
+          "request": "POST tools/list",
+          "mcp_protocol_version_header": "2024-11-05"
+        },
+        {
+          "request": "POST tools/call",
+          "mcp_protocol_version_header": "2024-11-05"
+        }
+      ]
+    }
+  ]
+}

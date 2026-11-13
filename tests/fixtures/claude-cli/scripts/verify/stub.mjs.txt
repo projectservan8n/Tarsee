@@ -1,0 +1,170 @@
+// Verification stub that stands in for `claude`. It records what it was started with and what arrives on stdin, and
+// plays a scripted stdout. The record goes to the file named by VSTUB_OUT, one JSON object per line, appended
+// synchronously so a kill loses nothing. The scenario is VSTUB_SCENARIO.
+import fs from "node:fs";
+
+const t0 = Date.now();
+const out = process.env.VSTUB_OUT;
+const scenario = process.env.VSTUB_SCENARIO || "turn";
+const rec = (o) => { if (out) fs.appendFileSync(out, JSON.stringify({ t: Date.now() - t0, ...o }) + "\n"); };
+
+rec({ ev: "start", argv: process.argv.slice(2), cwd: process.cwd(), env: { ...process.env }, pid: process.pid, stdinIsTTY: !!process.stdin.isTTY });
+
+const SID = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+let n = 0;
+const uuid = () => `00000000-0000-4000-8000-${String(++n).padStart(12, "0")}`;
+const EOL = process.env.VSTUB_EOL === "crlf" ? "\r\n" : "\n"; // VSTUB_EOL=crlf: every stdout line ends with CR LF
+const write = (o) => { const line = JSON.stringify(o) + EOL; rec({ ev: "stdout", type: o.type, subtype: o.subtype ?? o.event?.type ?? o.response?.subtype ?? o.request?.subtype }); process.stdout.write(line); };
+const readsState = Object.keys(process.env).some((k) => k.toUpperCase() === "CLAUDE_CODE_SDK_READS_SESSION_STATE");
+const state = (s) => { if (readsState) write({ type: "system", subtype: "session_state_changed", state: s, uuid: uuid(), session_id: SID, sdk_host_only: true }); };
+const ev = (event) => write({ type: "stream_event", event, session_id: SID, parent_tool_use_id: null, uuid: uuid() });
+const init = (extra = {}) => write({ type: "system", subtype: "init", cwd: process.cwd(), session_id: SID, tools: ["Bash", "Edit", "Glob", "Grep", "Read", "Write"], mcp_servers: [], model: "stub-model", permissionMode: "bypassPermissions", slash_commands: [], apiKeySource: process.env.ANTHROPIC_API_KEY ? "ANTHROPIC_API_KEY" : "none", claude_code_version: "2.1.319", uuid: uuid(), ...extra });
+const usage = { input_tokens: 10, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+const startCall = (id) => ev({ type: "message_start", message: { id, type: "message", role: "assistant", model: "stub-model", content: [], stop_reason: null, stop_sequence: null, usage } });
+function textCall(id, text, { finish = true } = {}) {
+  startCall(id);
+  ev({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
+  ev({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text } });
+  if (!finish) return;
+  write({ type: "assistant", message: { id, type: "message", role: "assistant", model: "stub-model", content: [{ type: "text", text }], stop_reason: null, stop_sequence: null, usage }, parent_tool_use_id: null, session_id: SID, uuid: uuid() });
+  ev({ type: "content_block_stop", index: 0 });
+  ev({ type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 5 } });
+  ev({ type: "message_stop" });
+}
+const result = (extra = {}) => write({ type: "result", subtype: "success", is_error: false, result: "stub says hi", stop_reason: "end_turn", session_id: SID, num_turns: 1, duration_ms: 10, duration_api_ms: 5, total_cost_usd: 0.0001, usage: { ...usage, output_tokens: 5 }, modelUsage: { "stub-model": { inputTokens: 10, outputTokens: 5, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: 0.0001 } }, permission_denials: [], uuid: uuid(), ...extra });
+
+let exitOnStdinEnd = true;
+let stdinClosed = false;
+let exitCode = 0;
+let pendingMcp = null;
+
+function onLine(line) {
+  let msg;
+  try { msg = JSON.parse(line); } catch { rec({ ev: "stdin-not-json", line }); return; }
+  rec({ ev: "stdin", bytes: Buffer.byteLength(line) + 1, raw: line.length > 4000 ? undefined : line, json: msg });
+  if (msg.type === "control_request" && msg.request?.subtype === "initialize") {
+    if (scenario === "no-init-answer") return;
+    write({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: { commands: [], agents: [], models: [], pid: process.pid, claude_code_version: "2.1.319" }, pending_permission_requests: [], pending_user_dialog_requests: [] } });
+    if (scenario === "exit0-after-init-answer") setTimeout(() => process.exit(0), 50);
+    return;
+  }
+  if (msg.type === "control_request" && msg.request?.subtype === "interrupt") {
+    write({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: { still_queued: [] } } });
+    return;
+  }
+  if (msg.type === "control_response") {
+    if (pendingMcp && msg.response?.request_id === pendingMcp) {
+      pendingMcp = null;
+      write({ type: "user", message: { role: "user", content: [{ tool_use_id: "toolu_stub_1", type: "tool_result", content: msg.response?.response?.mcp_response?.result?.content ?? "no content" }] }, parent_tool_use_id: null, session_id: SID, uuid: uuid() });
+      textCall("msg_stub_2", "done");
+      result();
+      state("idle");
+    }
+    return;
+  }
+  if (msg.type !== "user") return;
+  rec({ ev: "user-message-read" });
+  switch (scenario) {
+    case "turn":
+    case "no-init-answer":
+      state("running"); init(); textCall("msg_stub_1", "stub says hi"); result(); rec({ ev: "result-written" }); state("idle");
+      break;
+    case "turn-slow":
+      // like the real program: a closed stdin does not end the turn; it exits after its result
+      exitOnStdinEnd = false;
+      state("running"); init(); setTimeout(() => { textCall("msg_stub_1", "stub says hi"); result(); rec({ ev: "result-written" }); state("idle"); exitOnStdinEnd = true; if (stdinClosed) { rec({ ev: "exit", code: 0 }); process.exit(0); } }, 400);
+      break;
+    case "mcp-call": {
+      state("running");
+      init({ mcp_servers: [{ name: "tarsee", status: "connected" }] });
+      startCall("msg_stub_1");
+      write({ type: "assistant", message: { id: "msg_stub_1", type: "message", role: "assistant", model: "stub-model", content: [{ type: "tool_use", id: "toolu_stub_1", name: "mcp__tarsee__tarsee_datetime", input: { format: "iso" } }], stop_reason: null, stop_sequence: null, usage }, parent_tool_use_id: null, session_id: SID, uuid: uuid() });
+      pendingMcp = "11111111-2222-4333-8444-000000000001";
+      write({ type: "control_request", request_id: pendingMcp, request: { subtype: "mcp_message", server_name: "tarsee", message: { method: "tools/call", params: { name: "tarsee_datetime", arguments: { format: "iso" }, _meta: { "claudecode/toolUseId": "toolu_stub_1", progressToken: 2 } }, jsonrpc: "2.0", id: 2 } } });
+      break;
+    }
+    case "unknown-control": {
+      state("running"); init();
+      for (const [i, request] of [
+        { subtype: "can_use_tool", tool_name: "Bash", input: {}, tool_use_id: "toolu_x" },
+        { subtype: "hook_callback", callback_id: "hook_9", input: {} },
+        { subtype: "mcp_message", server_name: "nope", message: { jsonrpc: "2.0", id: 1, method: "tools/list" } },
+        { subtype: "elicitation", mcp_server_name: "x", message: "m" },
+        { subtype: "request_user_dialog", dialog_kind: "k", payload: {} },
+        { subtype: "remote_tool_call" },
+        { subtype: "oauth_token_refresh" },
+        { subtype: "host_auth_token_refresh" },
+        { subtype: "made_up_kind" },
+      ].entries()) write({ type: "control_request", request_id: `req-${i}`, request });
+      setTimeout(() => { textCall("msg_stub_1", "stub says hi"); result(); state("idle"); }, 300);
+      break;
+    }
+    case "hang":
+      exitOnStdinEnd = false;
+      state("running"); init(); textCall("msg_stub_1", "partial", { finish: false });
+      break;
+    case "hang-then-more":
+      // keeps writing stream events every 200 ms so the caller's loop sees a message after its abort
+      exitOnStdinEnd = false;
+      state("running"); init(); textCall("msg_stub_1", "partial", { finish: false });
+      setInterval(() => ev({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "." } }), 200);
+      break;
+    case "exit-on-stdin-close":
+      state("running"); init(); textCall("msg_stub_1", "partial", { finish: false });
+      break;
+    case "exit0-mid-answer":
+      state("running"); init(); textCall("msg_stub_1", "partial", { finish: false });
+      setTimeout(() => process.exit(0), 50);
+      break;
+    case "error-result":
+      exitCode = 1;
+      state("running"); init();
+      write({ type: "result", subtype: "error_during_execution", is_error: true, session_id: SID, num_turns: 0, errors: ["first thing went wrong ", " second thing"], uuid: uuid(), usage });
+      state("idle");
+      break;
+    case "api-error-result":
+      exitCode = 1;
+      state("running"); init();
+      write({ type: "assistant", message: { id: "x", type: "message", role: "assistant", model: "<synthetic>", content: [{ type: "text", text: "API Error: 529 Overloaded." }] }, parent_tool_use_id: null, session_id: SID, uuid: uuid(), error: "server_error" });
+      write({ type: "result", subtype: "success", is_error: true, result: "API Error: 529 Overloaded.", session_id: SID, num_turns: 1, uuid: uuid(), usage });
+      state("idle");
+      break;
+    case "bad-key-source":
+      exitOnStdinEnd = false;
+      state("running"); init({ apiKeySource: "/login managed key" });
+      break;
+    case "non-json-lines":
+      state("running"); init();
+      process.stdout.write("this line is not JSON\n\n   \n");
+      process.stdout.write(JSON.stringify({ type: "keep_alive" }) + "\r\n");
+      textCall("msg_stub_1", "line separators   inside   text"); result(); state("idle");
+      break;
+    default:
+      break;
+  }
+}
+
+// (a made-up string shaped like a key, put together here so that no file holds one: the SDK must replace it)
+const KEY_SHAPED = ["sk", "ant", "api03", "A".repeat(36) + "1234"].join("-");
+if (scenario === "exit1-at-once") { process.stderr.write(`stub: fatal problem on stderr ${KEY_SHAPED}\n`); rec({ ev: "exit", code: 1 }); process.exit(1); }
+if (scenario === "exit0-at-once") { rec({ ev: "exit", code: 0 }); process.exit(0); }
+if (scenario === "exit3-no-stderr") { rec({ ev: "exit", code: 3 }); process.exit(3); }
+
+let buf = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (d) => {
+  buf += d;
+  let i;
+  while ((i = buf.indexOf("\n")) >= 0) { const line = buf.slice(0, i); buf = buf.slice(i + 1); if (line.trim()) onLine(line); }
+});
+process.stdin.on("end", () => {
+  stdinClosed = true;
+  rec({ ev: "stdin-closed", leftover: buf.length });
+  if (exitOnStdinEnd) { rec({ ev: "exit", code: exitCode }); process.exit(exitCode); }
+});
+process.stdout.on("error", (e) => rec({ ev: "stdout-error", code: e.code }));
+// the launcher is what the SDK kills: go with it, as one process would (checked every 25 ms)
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+setInterval(() => { if (!alive(process.ppid)) { rec({ ev: "exit", code: null, why: "launcher gone" }); process.exit(0); } }, 25);
+// never outlive the test: the launcher may be killed while this script lives on
+setTimeout(() => { rec({ ev: "exit", code: 0, why: "stub lifetime cap" }); process.exit(0); }, 14000);

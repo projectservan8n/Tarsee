@@ -1,0 +1,16 @@
+
+=== s29 how the transcript folder is named
+odd characters:
+   cwd (77 chars): <SCRATCH>\real\ws2\session ws.dir_1\café (x)+[y]
+   folder (77 chars): <SCRATCH_AS_FOLDER_NAME>-real-ws2-session-ws-dir-1-caf---x---y-
+   plain rule gives (77 chars): the same
+longer than 200:
+   cwd (210 chars): <SCRATCH>\real\ws2\aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\cccccccccccccccccccccccccccccccccccccccc
+   folder (207 chars): <SCRATCH_AS_FOLDER_NAME>-real-ws2-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-cccccccccccccccccccccccccccccc-z7altt
+   plain rule gives (210 chars): <SCRATCH_AS_FOLDER_NAME>-real-ws2-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-cccccccccccccccccccccccccccccccccccccccc
+   first 200 + "-" + base36(|hash|): <SCRATCH_AS_FOLDER_NAME>-real-ws2-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-cccccccccccccccccccccccccccccc-z7altt  -> MATCHES
+CLAUDE_CODE_PROJECT_DIR_NAME:
+   cwd (53 chars): <SCRATCH>\real\ws2\named
+   folder (9 chars): my_proj-1
+   plain rule gives (53 chars): <SCRATCH_AS_FOLDER_NAME>-real-ws2-named
+emoji cwd tail: 'emoji <U+1F600> dir' -> folder tail: "ws2-emoji----dir" (one astral character became 2 dashes)

@@ -1,0 +1,3 @@
+@ECHO off
+SETLOCAL
+"%~dp0fake-claude.exe" %*

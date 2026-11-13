@@ -1,0 +1,15 @@
+--- one element, first message 'say hi'
+   {"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.319.76b; cc_entrypoint=sdk-cli;"}
+   {"type":"text","text":"You are a Claude agent, built on Anthropic's Claude Agent SDK.","cache_control":{"type":"ephemeral"}}
+   {"type":"text","text":"PLAIN PROMPT","cache_control":{"type":"ephemeral"}}
+   anthropic-beta: claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,thinking-token-count-2026-05-13,thinking-display-updates-2026-08-18
+--- one element, first message 'one'
+   {"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.319.812; cc_entrypoint=sdk-cli;"}
+   {"type":"text","text":"You are a Claude agent, built on Anthropic's Claude Agent SDK.","cache_control":{"type":"ephemeral"}}
+   {"type":"text","text":"PLAIN PROMPT","cache_control":{"type":"ephemeral"}}
+   anthropic-beta: claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,thinking-token-count-2026-05-13,thinking-display-updates-2026-08-18
+--- three elements with the boundary marker
+   {"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.319.812; cc_entrypoint=sdk-cli;"}
+   {"type":"text","text":"You are a Claude agent, built on Anthropic's Claude Agent SDK.","cache_control":{"type":"ephemeral"}}
+   {"type":"text","text":"STABLE PART\n\nVOLATILE PART","cache_control":{"type":"ephemeral"}}
+   anthropic-beta: claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,thinking-token-count-2026-05-13,thinking-display-updates-2026-08-18

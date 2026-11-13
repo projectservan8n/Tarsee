@@ -1,0 +1,323 @@
+{
+  "name": "other-01-app-server-not-signed-in",
+  "what": "`codex app-server` in a home with no sign-in: initialize, initialized, account/read (account is null, where codex-models.js stops with not-signed-in), then model/list anyway (it answers from the catalog bundled in the program) and a method that does not exist.",
+  "made_with": {
+    "program": "codex 0.167.0 (the real pinned program)",
+    "platform": "win32"
+  },
+  "argv": [
+    "-c",
+    "cli_auth_credentials_store=\"file\"",
+    "-c",
+    "check_for_update_on_startup=false",
+    "-c",
+    "project_root_markers=[]",
+    "app-server"
+  ],
+  "envNames": [
+    "APPDATA",
+    "CODEX_HOME",
+    "ComSpec",
+    "HOME",
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "LOCALAPPDATA",
+    "NO_PROXY",
+    "PATH",
+    "RUST_LOG",
+    "SystemDrive",
+    "SystemRoot",
+    "TEMP",
+    "TMP",
+    "USERPROFILE"
+  ],
+  "envValues": {
+    "CODEX_HOME": "<CODEX_HOME>",
+    "RUST_LOG": "error"
+  },
+  "cwd": "<CODEX_HOME>",
+  "transcript": [
+    {
+      "dir": "tarsee -> codex",
+      "at_ms": 8,
+      "message": {
+        "id": 1,
+        "method": "initialize",
+        "params": {
+          "clientInfo": {
+            "name": "tarsee",
+            "title": "Tarsee",
+            "version": "0.2.0"
+          }
+        }
+      }
+    },
+    {
+      "dir": "codex -> tarsee",
+      "at_ms": 223,
+      "message": {
+        "id": 1,
+        "result": {
+          "userAgent": "tarsee/0.167.0 (Windows 10.0.26300; x86_64) unknown (tarsee; 0.2.0)",
+          "codexHome": "<CODEX_HOME>",
+          "platformFamily": "windows",
+          "platformOs": "windows"
+        }
+      }
+    },
+    {
+      "dir": "tarsee -> codex",
+      "at_ms": 223,
+      "message": {
+        "method": "initialized"
+      }
+    },
+    {
+      "dir": "tarsee -> codex",
+      "at_ms": 223,
+      "message": {
+        "id": 2,
+        "method": "account/read",
+        "params": {
+          "refreshToken": false
+        }
+      }
+    },
+    {
+      "dir": "codex -> tarsee",
+      "at_ms": 224,
+      "message": {
+        "method": "remoteControl/status/changed",
+        "params": {
+          "status": "disabled",
+          "serverName": "<MACHINE_NAME>",
+          "installationId": "<INSTALLATION_ID>",
+          "environmentId": null
+        },
+        "emittedAtMs": 1794527274984
+      }
+    },
+    {
+      "dir": "codex -> tarsee",
+      "at_ms": 228,
+      "message": {
+        "id": 2,
+        "result": {
+          "account": null,
+          "requiresOpenaiAuth": true,
+          "workspaceRouting": null
+        }
+      }
+    },
+    {
+      "dir": "tarsee -> codex",
+      "at_ms": 228,
+      "message": {
+        "id": 3,
+        "method": "model/list",
+        "params": {
+          "limit": 100,
+          "includeHidden": false
+        }
+      }
+    },
+    {
+      "dir": "codex -> tarsee",
+      "at_ms": 229,
+      "message": {
+        "id": 3,
+        "result": {
+          "data": [
+            {
+              "id": "gpt-6.1-sol",
+              "model": "gpt-6.1-sol",
+              "upgrade": null,
+              "upgradeInfo": null,
+              "availabilityNux": {
+                "message": "Maximize usage with GPT-6.1 Sol. Try it on complex work for near-Astra performance at a lower cost."
+              },
+              "displayName": "GPT-6.1-Sol",
+              "description": "Latest workhorse model for coding and everyday work.",
+              "modelSpecialty": null,
+              "hidden": false,
+              "supportedReasoningEfforts": [
+                {
+                  "reasoningEffort": "low",
+                  "description": "Fast responses with lighter reasoning"
+                },
+                {
+                  "reasoningEffort": "medium",
+                  "description": "Balances speed and reasoning depth for everyday tasks"
+                },
+                {
+                  "reasoningEffort": "high",
+                  "description": "Greater reasoning depth for complex problems"
+                },
+                {
+                  "reasoningEffort": "xhigh",
+                  "description": "Extra high reasoning depth for complex problems"
+                },
+                {
+                  "reasoningEffort": "max",
+                  "description": "Maximum reasoning depth for the hardest problems"
+                },
+                {
+                  "reasoningEffort": "ultra",
+                  "description": "Maximum reasoning with automatic task delegation"
+                }
+              ],
+              "defaultReasoningEffort": "low",
+              "inputModalities": [
+                "text",
+                "image"
+              ],
+              "supportsPersonality": false,
+              "multiAgentVersion": "v2",
+              "additionalSpeedTiers": [
+                "fast"
+              ],
+              "serviceTiers": [
+                {
+                  "id": "priority",
+                  "name": "Fast",
+                  "description": "2x speed, increased usage"
+                }
+              ],
+              "defaultServiceTier": null,
+              "availableAccessPrograms": null,
+              "isDefault": true
+            },
+            {
+              "id": "gpt-6-astra",
+              "model": "gpt-6-astra",
+              "upgrade": null,
+              "upgradeInfo": null,
+              "availabilityNux": null,
+              "displayName": "GPT-6-Astra",
+              "description": "Frontier intelligence for the most demanding work.",
+              "modelSpecialty": null,
+              "hidden": false,
+              "supportedReasoningEfforts": [
+                {
+                  "reasoningEffort": "low",
+                  "description": "Fast responses with lighter reasoning"
+                },
+                {
+                  "reasoningEffort": "medium",
+                  "description": "Balances speed and reasoning depth for everyday tasks"
+                },
+                {
+                  "reasoningEffort": "high",
+                  "description": "Greater reasoning depth for complex problems"
+                },
+                {
+                  "reasoningEffort": "xhigh",
+                  "description": "Extra high reasoning depth for complex problems"
+                },
+                {
+                  "reasoningEffort": "max",
+                  "description": "Maximum reasoning depth for the hardest problems"
+                },
+                {
+                  "reasoningEffort": "ultra",
+                  "description": "Maximum reasoning with automatic task delegation"
+                }
+              ],
+              "defaultReasoningEffort": "low",
+              "inputModalities": [
+                "text",
+                "image"
+              ],
+              "supportsPersonality": false,
+              "multiAgentVersion": "v2",
+              "additionalSpeedTiers": [
+                "fast"
+              ],
+              "serviceTiers": [
+                {
+                  "id": "priority",
+                  "name": "Fast",
+                  "description": "2x speed, increased usage"
+                }
+              ],
+              "defaultServiceTier": null,
+              "availableAccessPrograms": null,
+              "isDefault": false
+            },
+            {
+              "(capture note)": "7 more models, same shape",
+              "ids": [
+                "gpt-6-sol",
+                "gpt-6-luna",
+                "gpt-5.6-sol",
+                "gpt-6.1-terra",
+                "gpt-5.6-terra",
+                "gpt-5.6-luna",
+                "gpt-5.5"
+              ]
+            }
+          ],
+          "nextCursor": null
+        }
+      }
+    },
+    {
+      "dir": "tarsee -> codex",
+      "at_ms": 229,
+      "message": {
+        "id": 4,
+        "method": "no/such/method",
+        "params": {}
+      }
+    },
+    {
+      "dir": "codex -> tarsee",
+      "at_ms": 230,
+      "message": {
+        "error": {
+          "code": -32600,
+          "message": "Invalid request: unknown variant `no/such/method`, expected one of `initialize`, `server/diagnostics`, `userVerification/status`, `userVerification/enroll`, `userVerification/delete`, `userVerification/verify`, `userVerification/cancel`, `thread/start`, `thread/resume`, `thread/fork`, `thread/sample`, `thread/sample/cancel`, `thread/archive`, `thread/delete`, `thread/unsubscribe`, `thread/increment_elicitation`, `thread/decrement_elicitation`, `thread/name/set`, `thread/prediction/request`, `thread/goal/set`, `thread/goal/get`, `thread/goal/clear`, `thread/queue/add`, `thread/queue/list`, `thread/queue/update`, `thread/queue/delete`, `thread/queue/reorder`, `thread/queue/start`, `thread/metadata/update`, `thread/attachment/add`, `thread/attachment/list`, `thread/attachmentOwner/list`, `thread/attachment/remove`, `thread/section/move`, `thread/settings/update`, `thread/memoryMode/set`, `thread/memory/read`, `memory/status`, `memory/reset`, `rollout/compress`, `thread/unarchive`, `thread/compact/start`, `thread/shellCommand`, `thread/approveGuardianDeniedAction`, `thread/backgroundTerminals/clean`, `thread/backgroundTerminals/list`, `thread/backgroundTerminals/terminate`, `thread/revert`, `thread/list`, `project/list`, `project/read`, `project/create`, `project/import`, `project/update`, `project/move`, `project/delete`, `threadSection/list`, `threadSection/create`, `threadSection/update`, `threadSection/delete`, `thread/search`, `thread/searchOccurrences`, `thread/loaded/list`, `thread/read`, `thread/readState/update`, `thread/turns/list`, `thread/items/list`, `thread/items/read`, `thread/guardianReview`, `thread/inject_items`, `skills/list`, `skills/extraRoots/set`, `hooks/list`, `marketplace/add`, `marketplace/remove`, `marketplace/upgrade`, `plugin/list`, `plugin/search`, `plugin/installed`, `plugin/reconcile`, `plugin/read`, `plugin/skill/read`, `plugin/share/save`, `plugin/share/updateTargets`, `plugin/share/list`, `plugin/share/checkout`, `plugin/share/delete`, `app/read`, `app/list`, `app/installed`, `fs/readFile`, `fs/writeFile`, `fs/createDirectory`, `fs/getMetadata`, `fs/readDirectory`, `fs/remove`, `fs/copy`, `fs/watch`, `fs/unwatch`, `skills/config/write`, `plugin/install`, `plugin/uninstall`, `turn/start`, `turn/settings/update`, `turn/steer`, `turn/interrupt`, `thread/realtime/start`, `thread/realtime/appendAudio`, `thread/realtime/appendText`, `thread/realtime/appendSpeech`, `thread/realtime/stop`, `thread/timeline/list`, `thread/realtime/listVoices`, `review/start`, `model/list`, `account/gatewayOAuth/read`, `account/gatewayOAuth/login`, `account/gatewayOAuth/cancel`, `modelProvider/capabilities/read`, `experimentalFeature/list`, `permissionProfile/list`, `experimentalFeature/enablement/set`, `remoteControl/enable`, `remoteControl/disable`, `remoteControl/status/read`, `remoteControl/pairing/start`, `remoteControl/pairing/status`, `remoteControl/client/list`, `remoteControl/client/revoke`, `collaborationMode/list`, `mock/experimentalMethod`, `environment/add`, `environment/info`, `environment/status`, `mcpServer/oauth/login`, `config/mcpServer/reload`, `mcpServerStatus/list`, `mcpServer/resource/read`, `mcpServer/event/stream/start`, `mcpServer/event/stream/stop`, `mcpServer/tool/call`, `windowsSandbox/setupStart`, `windowsSandbox/readiness`, `account/login/start`, `account/bedrock/discover`, `account/bedrock/setup`, `account/gcp/setup`, `account/bedrock/checkGovCloudRequirements`, `account/login/cancel`, `accountSession/list`, `accountSession/switch`, `account/logout`, `account/rateLimits/read`, `account/rateLimitResetCredit/consume`, `account/usage/read`, `account/workspaceMessages/read`, `account/sendAddCreditsNudgeEmail`, `feedback/upload`, `feedback/save`, `command/exec`, `command/exec/write`, `command/exec/terminate`, `command/exec/resize`, `process/spawn`, `process/writeStdin`, `process/kill`, `process/resizePty`, `config/read`, `externalAgentConfig/detect`, `externalAgentConfig/import`, `externalAgentConfig/import/recordHistory`, `externalAgentConfig/import/readHistories`, `config/value/write`, `config/batchWrite`, `configRequirements/read`, `account/read`, `getConversationSummary`, `gitDiffToRemote`, `getAuthStatus`, `fuzzyFileSearch`, `fuzzyFileSearch/sessionStart`, `fuzzyFileSearch/sessionUpdate`, `fuzzyFileSearch/sessionStop`"
+        },
+        "id": 4
+      }
+    }
+  ],
+  "stderr": "",
+  "stdinClosedAt_ms": 230,
+  "endedByItselfWithin3s": true,
+  "exit": {
+    "code": 0,
+    "signal": null,
+    "at_ms": 1320
+  },
+  "homeAfter": [
+    ".sandbox/",
+    ".sandbox/sandbox.2026-11-12.log (131 bytes)",
+    ".tmp/",
+    ".tmp/git-V0bUAe/",
+    ".tmp/git-V0bUAe/HEAD (21 bytes)",
+    ".tmp/git-V0bUAe/objects/",
+    ".tmp/git-V0bUAe/refs/",
+    ".tmp/plugins.sync.lock (0 bytes)",
+    "goals_1.sqlite (4096 bytes)",
+    "goals_1.sqlite-shm (32768 bytes)",
+    "goals_1.sqlite-wal (74192 bytes)",
+    "installation_id (36 bytes)",
+    "logs_2.sqlite (49152 bytes)",
+    "logs_2.sqlite-shm (32768 bytes)",
+    "logs_2.sqlite-wal (115392 bytes)",
+    "memories_1.sqlite (4096 bytes)",
+    "memories_1.sqlite-shm (32768 bytes)",
+    "memories_1.sqlite-wal (86552 bytes)",
+    "queue_1.sqlite (4096 bytes)",
+    "queue_1.sqlite-shm (32768 bytes)",
+    "queue_1.sqlite-wal (82432 bytes)",
+    "skills/",
+    "skills/.system/ (Codex's own bundled skills, not listed)",
+    "state_5.sqlite (4096 bytes)",
+    "state_5.sqlite-shm (32768 bytes)",
+    "state_5.sqlite-wal (2142432 bytes)",
+    "tmp/",
+    "tmp/arg0-windows/"
+  ]
+}

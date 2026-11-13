@@ -1,0 +1,35 @@
+// What the Node classifier (codex-events.js classifyCodexFailure) makes of the failure texts seen in this check.
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+const SCRATCH = path.resolve(process.env.CAPTURE_SCRATCH);
+const PROJECT = process.env.CAPTURE_PROJECT;
+process.env.TARSEE_STATE_DIR = path.join(SCRATCH, "state-engine");
+process.env.TARSEE_WORKSPACE_DIR = path.join(SCRATCH, "state-engine", "workspace");
+process.env.TARSEE_DATA_DIR = path.join(SCRATCH, "state-engine", "data");
+const { classifyCodexFailure } = await import(pathToFileURL(path.join(PROJECT, "src/ai/providers/codex-events.js")).href);
+const x = (s) => `Codex Exec exited with code 1: Reading prompt from stdin...\n${s}\n`;
+const cases = {
+  "spawn ENAMETOOLONG": "spawn ENAMETOOLONG",
+  "spawn E2BIG": "spawn E2BIG",
+  "rust: os error 206": "The filename or extension is too long. (os error 206)",
+  "rust: os error 2": "The system cannot find the file specified. (os error 2)",
+  "429": "exceeded retry limit, last status: 429 Too Many Requests",
+  "500": "We’re currently experiencing high demand, which may cause temporary errors.",
+  "400 body": "{\"error\":{\"message\":\"Bad request body.\",\"type\":\"invalid_request_error\",\"code\":\"bad\"}}",
+  "404 message": "The model `test-model` does not exist.",
+  "401": "unexpected status 401 Unauthorized: Incorrect API key provided., url: http://127.0.0.1:1/v1/responses",
+  "mcp silent": x("Error: thread/start: thread/start failed: error creating thread: Fatal error: Failed to initialize session: required MCP servers failed to initialize: tarsee: timed out handshaking with MCP server after 19.9999994s: deadline has elapsed (code -32603)"),
+  "mcp unreachable": x("Error: thread/start: thread/start failed: error creating thread: Fatal error: Failed to initialize session: required MCP servers failed to initialize: tarsee: handshaking with MCP server failed: Send message error Transport [x] error: Client error: HTTP request failed: http/request failed: error sending request for url (http://127.0.0.1:9/mcp), when send initialize request (code -32603)"),
+  "no prompt": x("No prompt provided via stdin."),
+  "bad line": "Failed to parse item: not json",
+  "exit 2": "Codex Exec exited with code 2: error: unexpected argument '--bogus' found\n\n  tip: to pass '--bogus' as a value, use '-- --bogus'\n\nUsage: codex exec [OPTIONS] [PROMPT]\n       codex exec [OPTIONS] <COMMAND> [ARGS]\n\nFor more information, try '--help'.\n",
+  "killed, windows": "Codex Exec exited with code 1: ",
+  "missing key variable": "Missing environment variable: `TARSEE_PROVIDER_KEY`.",
+};
+const out = {};
+for (const [k, text] of Object.entries(cases)) { const c = classifyCodexFailure("openrouter", text, { model: "openai/gpt-5.5" }); out[k] = { text, kind: c.kind, recoverable: c.recoverable, message: c.message }; }
+fs.writeFileSync(path.join(SCRATCH, "out", "classify.json"), JSON.stringify(out, null, 1));
+for (const [k, v] of Object.entries(out)) console.log(k.padEnd(22), v.kind.padEnd(12), v.recoverable, "|", v.message.slice(0, 110));
+process.exit(0);

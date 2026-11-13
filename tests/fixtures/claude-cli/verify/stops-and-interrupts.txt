@@ -1,0 +1,15 @@
+
+=== s14 stdin closed as soon as the first model call starts; the model then asks for a tool
+stdout: 493:control_response  586:system/init  591:system/status  623:stream_event/message_start  623:stream_event/content_block_start  623:stream_event/content_block_delta  626:assistant  631:stream_event/content_block_stop  635:stream_event/message_delta  635:stream_event/message_stop  645:user  648:system/status  662:stream_event/message_start  662:stream_event/content_block_start  662:stream_event/content_block_delta  662:stream_event/content_block_delta  663:assistant  663:stream_event/content_block_stop  664:stream_event/message_delta  665:stream_event/message_stop  679:result/success
+stdin: 12:control_request 12:user 586:CLOSED | exit: {"t":715,"code":0,"signal":null}
+tools/call that reached the MCP server after stdin was closed: [ 640 ] | model calls: 2
+
+=== s15 interrupt, then stdin closed right after the interrupted result
+stdout: 495:control_response  562:system/init  569:system/status  600:stream_event/message_start  600:stream_event/content_block_start  1010:stream_event/content_block_delta  1011:control_response  1013:assistant  1014:user  1015:stream_event/content_block_stop  1015:stream_event/message_delta  1015:stream_event/message_stop  1027:result/error_during_execution
+stdin: 7:control_request 7:user 1010:control_request 1027:CLOSED | exit: {"t":1060,"code":1,"signal":null} | stderr: ""
+
+=== s17 an interrupt when no turn is running (before any user message), then a user message
+stdout: 461:control_response  463:control_response  532:system/init  540:system/status  576:stream_event/message_start  576:stream_event/content_block_start  576:stream_event/content_block_delta  576:stream_event/content_block_delta  578:assistant  578:stream_event/content_block_stop  579:stream_event/message_delta  580:stream_event/message_stop  595:result/success | exit: {"t":629,"code":0,"signal":null} | notes: [{"t":463,"note":"{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"int0\",\"response\":{\"still_queued\":[]}}}"}]
+
+=== s18 the result of a failed resume, with stdin left open
+stdout: 477:result/error_during_execution | exit: {"t":511,"code":1,"signal":null} | notes: []

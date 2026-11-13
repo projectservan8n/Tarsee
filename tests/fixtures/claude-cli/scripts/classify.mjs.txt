@@ -1,0 +1,22 @@
+// What Tarsee's engine-errors.js makes of each failure the real program produced (code = assistant.error, words = its text).
+import fs from "node:fs";
+import { pathToFileURL } from "node:url";
+process.env.TARSEE_STATE_DIR = `${process.env.CAPTURE_SCRATCH}/tarsee-state`;
+process.env.TARSEE_WORKSPACE_DIR = `${process.env.CAPTURE_SCRATCH}/tarsee-workspace`;
+process.env.TARSEE_DATA_DIR = `${process.env.CAPTURE_SCRATCH}/tarsee-data`;
+const { classifyEngineError } = await import(pathToFileURL(`${process.env.TARSEE_NODE_PROJECT}/src/ai/engine-errors.js`).href);
+const dir = process.argv[2];
+const rows = [];
+for (const f of fs.readdirSync(dir).filter((x) => x.startsWith("fail-") || x === "stop-interrupt-request.json").sort()) {
+  const r = JSON.parse(fs.readFileSync(`${dir}/${f}`, "utf8"));
+  const msgs = r.stdout.map((o) => o.json).filter(Boolean);
+  const a = msgs.find((m) => m.type === "assistant" && m.error);
+  const res = msgs.find((m) => m.type === "result");
+  if (!res) { rows.push({ file: f, note: "no result message" }); continue; }
+  const text = a ? a.message.content.filter((b) => b.type === "text").map((b) => b.text).join("") : null;
+  const words = res.subtype !== "success" ? (text || (res.errors || []).join("; ") || res.subtype) : (text || res.result);
+  const kinds = {};
+  for (const p of ["claude", "anthropic", "deepseek", "openrouter"]) { const c = classifyEngineError(p, "claude-code", { code: a?.error, message: words, model: "the-model" }); kinds[p] = `${c.kind}${c.recoverable ? " (recoverable)" : ""}${c.status ? ` ${c.status}` : ""}${c.state ? ` state=${c.state}` : ""}`; }
+  rows.push({ file: f, subtype: res.subtype, is_error: res.is_error, assistant_error: a?.error ?? null, api_error_status: res.api_error_status ?? null, words: words.slice(0, 90), kinds });
+}
+for (const r of rows) console.log(JSON.stringify(r));

@@ -1,0 +1,2209 @@
+{
+ "how": "Tarsee's own run() -> the real SDK 0.3.319 -> a stub in place of claude (scripts/verify/cap.mjs, stub.mjs, tramp.rs). `t` on stdin lines and in stub_timeline is milliseconds since the stub started; every other `t` is milliseconds since run() was called.",
+ "captures": {
+  "a-plan-plain": {
+   "what": "The Claude plan, a new session, a plain system prompt, no MCP server.",
+   "stub_scenario": "turn",
+   "sdk_query": {
+    "prompt": "say hi",
+    "options": {"cwd":"<SCRATCH>\\ws","model":"claude-sonnet-5-5","tools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"allowedTools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"permissionMode":"bypassPermissions","allowDangerouslySkipPermissions":true,"maxTurns":50,"includePartialMessages":true,"settingSources":["user","project","local"],"strictMcpConfig":false,"additionalDirectories":["<TARSEE_ROOT>\\src\\skills"],"systemPrompt":{"type":"custom","prompt":"You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]","snapshot":false},"abortController":"<AbortController aborted=false>","fallbackModel":"claude-haiku-5-5","stderr":"<function>"}
+   },
+   "argv": [
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--max-turns=50",
+    "--model=claude-sonnet-5-5",
+    "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--setting-sources=user,project,local",
+    "--permission-mode=bypassPermissions",
+    "--allow-dangerously-skip-permissions",
+    "--fallback-model=claude-haiku-5-5",
+    "--include-partial-messages",
+    "--add-dir=<TARSEE_ROOT>\\src\\skills"
+   ],
+   "env": {
+    "given_to_sdk": {"BASH_MAX_OUTPUT_LENGTH":"8000","CLAUDE_CODE_AUTO_COMPACT_WINDOW":"180000","CLAUDE_CODE_OAUTH_TOKEN":"<PLAN_OAUTH_TOKEN>","DEBUG":"canary","MAX_MCP_OUTPUT_TOKENS":"3000","MY_VAULT_KEY":"vault-value","NODE_OPTIONS":"--max-old-space-size=2048","VERIFY_PLAIN":"kept"},
+    "added_by_sdk": {"CLAUDE_AGENT_SDK_VERSION":"0.3.319","CLAUDE_CODE_ENTRYPOINT":"sdk-ts","CLAUDE_CODE_SDK_READS_SESSION_STATE":"1"},
+    "removed_by_sdk": ["DEBUG","NODE_OPTIONS"],
+    "changed_by_sdk": [],
+    "filled_in_by_windows_process_start": ["HOMEDRIVE","HOMEPATH","LOGONSERVER","USERDOMAIN","USERNAME"]
+   },
+   "stdin": [
+    {"t":6,"bytes":3492,"json":{"request_id":"mqft03ovsqb","type":"control_request","request":{"subtype":"initialize","systemPrompt":["You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]"],"systemPromptSnapshot":false}}},
+    {"t":7,"bytes":128,"json":{"type":"user","session_id":"","message":{"role":"user","content":[{"type":"text","text":"say hi"}]},"parent_tool_use_id":null}}
+   ],
+   "stub_timeline": [
+    {"t":6,"ev":"stdout","type":"control_response","subtype":"success"},
+    {"t":7,"ev":"user-message-read"},
+    {"t":8,"ev":"stdout","type":"system","subtype":"session_state_changed"},
+    {"t":8,"ev":"stdout","type":"system","subtype":"init"},
+    {"t":8,"ev":"stdout","type":"stream_event","subtype":"message_start"},
+    {"t":9,"ev":"stdout","type":"stream_event","subtype":"content_block_start"},
+    {"t":9,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":9,"ev":"stdout","type":"assistant"},
+    {"t":10,"ev":"stdout","type":"stream_event","subtype":"content_block_stop"},
+    {"t":10,"ev":"stdout","type":"stream_event","subtype":"message_delta"},
+    {"t":10,"ev":"stdout","type":"stream_event","subtype":"message_stop"},
+    {"t":10,"ev":"stdout","type":"result","subtype":"success"},
+    {"t":11,"ev":"result-written"},
+    {"t":11,"ev":"stdout","type":"system","subtype":"session_state_changed"},
+    {"t":14,"ev":"stdin-closed"},
+    {"t":14,"ev":"exit","code":0}
+   ],
+   "abort_at_ms": null,
+   "harness_notes": [
+    {"t":108,"event":"sdk stream finished"}
+   ],
+   "sdk_messages_seen_by_tarsee": [
+    "94:system/init",
+    "95:stream_event/message_start",
+    "95:stream_event/content_block_start",
+    "95:stream_event/content_block_delta",
+    "95:assistant",
+    "96:stream_event/content_block_stop",
+    "96:stream_event/message_delta",
+    "96:stream_event/message_stop",
+    "97:result/success"
+   ],
+   "sdk_error_thrown": null,
+   "tarsee_events": [
+    {"t":95,"type":"step","kind":"usage"},
+    {"t":95,"type":"text","content":"stub says hi"},
+    {"t":96,"type":"step","kind":"text"},
+    {"t":96,"type":"step","kind":"usage"},
+    {"t":97,"type":"usage","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"context_input_tokens":10}},
+    {"t":97,"type":"done","stopReason":"end_turn"}
+   ],
+   "tarsee_logs": [
+    {"t":10,"level":"log","text":"[claude-code] Starting claude turn in <SCRATCH>\\ws, model: claude-sonnet-5-5, session: new, media: 0"},
+    {"t":94,"level":"log","text":"[claude-code] claude: apiKeySource=none"}
+   ],
+   "run_returned_at_ms": 108
+  },
+  "b-plan-resume-parts-effort-thinking": {
+   "what": "Resume, stable and volatile system parts, effort high, thinking summaries.",
+   "stub_scenario": "turn",
+   "sdk_query": {
+    "prompt": "say hi",
+    "options": {"cwd":"<SCRATCH>\\ws","model":"claude-opus-5-5","tools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"allowedTools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"permissionMode":"bypassPermissions","allowDangerouslySkipPermissions":true,"maxTurns":50,"includePartialMessages":true,"settingSources":["user","project","local"],"strictMcpConfig":false,"additionalDirectories":["<TARSEE_ROOT>\\src\\skills"],"systemPrompt":{"type":"custom","prompt":["You ARE Tarsee — a headless AI agent running 24/7 on a serve … f they want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSTABLE PART [3244 characters]","__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__","VOLATILE PART"],"snapshot":false},"abortController":"<AbortController aborted=false>","resume":"0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d","fallbackModel":"claude-sonnet-5-5,claude-haiku-5-5","effort":"high","thinking":{"type":"adaptive","display":"summarized"},"stderr":"<function>"}
+   },
+   "argv": [
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--thinking=adaptive",
+    "--thinking-display=summarized",
+    "--effort=high",
+    "--max-turns=50",
+    "--model=claude-opus-5-5",
+    "--resume=0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+    "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--setting-sources=user,project,local",
+    "--permission-mode=bypassPermissions",
+    "--allow-dangerously-skip-permissions",
+    "--fallback-model=claude-sonnet-5-5,claude-haiku-5-5",
+    "--include-partial-messages",
+    "--add-dir=<TARSEE_ROOT>\\src\\skills"
+   ],
+   "env": {
+    "given_to_sdk": {"BASH_MAX_OUTPUT_LENGTH":"8000","CLAUDE_CODE_AUTO_COMPACT_WINDOW":"180000","CLAUDE_CODE_OAUTH_TOKEN":"<PLAN_OAUTH_TOKEN>","DEBUG":"canary","MAX_MCP_OUTPUT_TOKENS":"3000","MY_VAULT_KEY":"vault-value","NODE_OPTIONS":"--max-old-space-size=2048","VERIFY_PLAIN":"kept"},
+    "added_by_sdk": {"CLAUDE_AGENT_SDK_VERSION":"0.3.319","CLAUDE_CODE_ENTRYPOINT":"sdk-ts","CLAUDE_CODE_SDK_READS_SESSION_STATE":"1"},
+    "removed_by_sdk": ["DEBUG","NODE_OPTIONS"],
+    "changed_by_sdk": [],
+    "filled_in_by_windows_process_start": ["HOMEDRIVE","HOMEPATH","LOGONSERVER","USERDOMAIN","USERNAME"]
+   },
+   "stdin": [
+    {"t":5,"bytes":3538,"json":{"request_id":"355jx1wya9g","type":"control_request","request":{"subtype":"initialize","systemPrompt":["You ARE Tarsee — a headless AI agent running 24/7 on a serve … f they want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSTABLE PART [3244 characters]","__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__","VOLATILE PART"],"systemPromptSnapshot":false}}},
+    {"t":6,"bytes":128,"json":{"type":"user","session_id":"","message":{"role":"user","content":[{"type":"text","text":"say hi"}]},"parent_tool_use_id":null}}
+   ],
+   "stub_timeline": [
+    {"t":5,"ev":"stdout","type":"control_response","subtype":"success"},
+    {"t":6,"ev":"user-message-read"},
+    {"t":6,"ev":"stdout","type":"system","subtype":"session_state_changed"},
+    {"t":7,"ev":"stdout","type":"system","subtype":"init"},
+    {"t":7,"ev":"stdout","type":"stream_event","subtype":"message_start"},
+    {"t":7,"ev":"stdout","type":"stream_event","subtype":"content_block_start"},
+    {"t":8,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":8,"ev":"stdout","type":"assistant"},
+    {"t":8,"ev":"stdout","type":"stream_event","subtype":"content_block_stop"},
+    {"t":8,"ev":"stdout","type":"stream_event","subtype":"message_delta"},
+    {"t":9,"ev":"stdout","type":"stream_event","subtype":"message_stop"},
+    {"t":9,"ev":"stdout","type":"result","subtype":"success"},
+    {"t":9,"ev":"result-written"},
+    {"t":10,"ev":"stdout","type":"system","subtype":"session_state_changed"},
+    {"t":10,"ev":"stdin-closed"},
+    {"t":10,"ev":"exit","code":0}
+   ],
+   "abort_at_ms": null,
+   "harness_notes": [
+    {"t":92,"event":"sdk stream finished"}
+   ],
+   "sdk_messages_seen_by_tarsee": [
+    "80:system/init",
+    "81:stream_event/message_start",
+    "81:stream_event/content_block_start",
+    "81:stream_event/content_block_delta",
+    "82:assistant",
+    "82:stream_event/content_block_stop",
+    "83:stream_event/message_delta",
+    "83:stream_event/message_stop",
+    "83:result/success"
+   ],
+   "sdk_error_thrown": null,
+   "tarsee_events": [
+    {"t":81,"type":"step","kind":"usage"},
+    {"t":81,"type":"text","content":"stub says hi"},
+    {"t":82,"type":"step","kind":"text"},
+    {"t":83,"type":"step","kind":"usage"},
+    {"t":83,"type":"usage","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"context_input_tokens":10}},
+    {"t":83,"type":"done","stopReason":"end_turn"}
+   ],
+   "tarsee_logs": [
+    {"t":2,"level":"log","text":"[claude-code] Starting claude turn in <SCRATCH>\\ws, model: claude-opus-5-5, session: 0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d, media: 0"},
+    {"t":80,"level":"log","text":"[claude-code] claude: apiKeySource=none"}
+   ],
+   "run_returned_at_ms": 92
+  },
+  "c-plan-media-image-no-mcp": {
+   "what": "A picture and words in the last message, no MCP server: the prompt is a generator, stdin is closed right after the user message (the stub, like the real program, still finishes the turn).",
+   "stub_scenario": "turn-slow",
+   "sdk_query": {
+    "prompt": "<an async generator of one user message>",
+    "options": {"cwd":"<SCRATCH>\\ws","model":"claude-sonnet-5-5","tools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"allowedTools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"permissionMode":"bypassPermissions","allowDangerouslySkipPermissions":true,"maxTurns":50,"includePartialMessages":true,"settingSources":["user","project","local"],"strictMcpConfig":false,"additionalDirectories":["<TARSEE_ROOT>\\src\\skills"],"systemPrompt":{"type":"custom","prompt":"You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]","snapshot":false},"abortController":"<AbortController aborted=false>","fallbackModel":"claude-haiku-5-5","stderr":"<function>"}
+   },
+   "argv": [
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--max-turns=50",
+    "--model=claude-sonnet-5-5",
+    "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--setting-sources=user,project,local",
+    "--permission-mode=bypassPermissions",
+    "--allow-dangerously-skip-permissions",
+    "--fallback-model=claude-haiku-5-5",
+    "--include-partial-messages",
+    "--add-dir=<TARSEE_ROOT>\\src\\skills"
+   ],
+   "env": {
+    "given_to_sdk": {"BASH_MAX_OUTPUT_LENGTH":"8000","CLAUDE_CODE_AUTO_COMPACT_WINDOW":"180000","CLAUDE_CODE_OAUTH_TOKEN":"<PLAN_OAUTH_TOKEN>","DEBUG":"canary","MAX_MCP_OUTPUT_TOKENS":"3000","MY_VAULT_KEY":"vault-value","NODE_OPTIONS":"--max-old-space-size=2048","VERIFY_PLAIN":"kept"},
+    "added_by_sdk": {"CLAUDE_AGENT_SDK_VERSION":"0.3.319","CLAUDE_CODE_ENTRYPOINT":"sdk-ts","CLAUDE_CODE_SDK_READS_SESSION_STATE":"1"},
+    "removed_by_sdk": ["DEBUG","NODE_OPTIONS"],
+    "changed_by_sdk": [],
+    "filled_in_by_windows_process_start": ["HOMEDRIVE","HOMEPATH","LOGONSERVER","USERDOMAIN","USERNAME"]
+   },
+   "stdin": [
+    {"t":4,"bytes":3491,"json":{"request_id":"xzs1z5yqxv","type":"control_request","request":{"subtype":"initialize","systemPrompt":["You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]"],"systemPromptSnapshot":false}}},
+    {"t":5,"bytes":313,"json":{"type":"user","message":{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="}},{"type":"text","text":"what is this? héllo 你好 🙂"}]},"parent_tool_use_id":null}}
+   ],
+   "stub_timeline": [
+    {"t":5,"ev":"stdout","type":"control_response","subtype":"success"},
+    {"t":6,"ev":"user-message-read"},
+    {"t":6,"ev":"stdout","type":"system","subtype":"session_state_changed"},
+    {"t":6,"ev":"stdout","type":"system","subtype":"init"},
+    {"t":7,"ev":"stdin-closed"},
+    {"t":417,"ev":"stdout","type":"stream_event","subtype":"message_start"},
+    {"t":417,"ev":"stdout","type":"stream_event","subtype":"content_block_start"},
+    {"t":418,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":418,"ev":"stdout","type":"assistant"},
+    {"t":418,"ev":"stdout","type":"stream_event","subtype":"content_block_stop"},
+    {"t":419,"ev":"stdout","type":"stream_event","subtype":"message_delta"},
+    {"t":419,"ev":"stdout","type":"stream_event","subtype":"message_stop"},
+    {"t":419,"ev":"stdout","type":"result","subtype":"success"},
+    {"t":419,"ev":"result-written"},
+    {"t":420,"ev":"stdout","type":"system","subtype":"session_state_changed"},
+    {"t":420,"ev":"exit","code":0}
+   ],
+   "abort_at_ms": null,
+   "harness_notes": [
+    {"t":505,"event":"sdk stream finished"}
+   ],
+   "sdk_messages_seen_by_tarsee": [
+    "83:system/init",
+    "494:stream_event/message_start",
+    "494:stream_event/content_block_start",
+    "495:stream_event/content_block_delta",
+    "495:assistant",
+    "495:stream_event/content_block_stop",
+    "496:stream_event/message_delta",
+    "496:stream_event/message_stop",
+    "496:result/success"
+   ],
+   "sdk_error_thrown": null,
+   "tarsee_events": [
+    {"t":494,"type":"step","kind":"usage"},
+    {"t":495,"type":"text","content":"stub says hi"},
+    {"t":495,"type":"step","kind":"text"},
+    {"t":496,"type":"step","kind":"usage"},
+    {"t":496,"type":"usage","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"context_input_tokens":10}},
+    {"t":496,"type":"done","stopReason":"end_turn"}
+   ],
+   "tarsee_logs": [
+    {"t":8,"level":"log","text":"[claude-code] Starting claude turn in <SCRATCH>\\ws, model: claude-sonnet-5-5, session: new, media: 1"},
+    {"t":83,"level":"log","text":"[claude-code] claude: apiKeySource=none"}
+   ],
+   "run_returned_at_ms": 505
+  },
+  "d-plan-media-pdf-adapted-real-mcp": {
+   "what": "The turn layer's adapted media (a PDF) with Tarsee's real in-process MCP server: stdin stays open to the result.",
+   "stub_scenario": "turn-slow",
+   "sdk_query": {
+    "prompt": "<an async generator of one user message>",
+    "options": {"cwd":"<SCRATCH>\\ws","model":"claude-sonnet-5-5","tools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"allowedTools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"permissionMode":"bypassPermissions","allowDangerouslySkipPermissions":true,"maxTurns":50,"includePartialMessages":true,"settingSources":["user","project","local"],"strictMcpConfig":false,"additionalDirectories":["<TARSEE_ROOT>\\src\\skills"],"systemPrompt":{"type":"custom","prompt":"You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]","snapshot":false},"abortController":"<AbortController aborted=false>","fallbackModel":"claude-haiku-5-5","mcpServers":{"tarsee":{"type":"sdk","name":"tarsee","instance":"<McpServer>"}},"stderr":"<function>"}
+   },
+   "argv": [
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--max-turns=50",
+    "--model=claude-sonnet-5-5",
+    "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--setting-sources=user,project,local",
+    "--permission-mode=bypassPermissions",
+    "--allow-dangerously-skip-permissions",
+    "--fallback-model=claude-haiku-5-5",
+    "--include-partial-messages",
+    "--add-dir=<TARSEE_ROOT>\\src\\skills"
+   ],
+   "env": {
+    "given_to_sdk": {"BASH_MAX_OUTPUT_LENGTH":"8000","CLAUDE_CODE_AUTO_COMPACT_WINDOW":"180000","CLAUDE_CODE_OAUTH_TOKEN":"<PLAN_OAUTH_TOKEN>","DEBUG":"canary","MAX_MCP_OUTPUT_TOKENS":"3000","MY_VAULT_KEY":"vault-value","NODE_OPTIONS":"--max-old-space-size=2048","VERIFY_PLAIN":"kept"},
+    "added_by_sdk": {"CLAUDE_AGENT_SDK_VERSION":"0.3.319","CLAUDE_CODE_ENTRYPOINT":"sdk-ts","CLAUDE_CODE_SDK_READS_SESSION_STATE":"1"},
+    "removed_by_sdk": ["DEBUG","NODE_OPTIONS"],
+    "changed_by_sdk": [],
+    "filled_in_by_windows_process_start": ["HOMEDRIVE","HOMEPATH","LOGONSERVER","USERDOMAIN","USERNAME"]
+   },
+   "stdin": [
+    {"t":3,"bytes":34134,"json":{"request_id":"gevasoqlv5","type":"control_request","request":{"subtype":"initialize","sdkMcpServers":["tarsee"],"sdkMcpServerManifests":{"tarsee":{"initializeResult":{"protocolVersion":"2025-11-25","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"tarsee","version":"1.0.0"}},"toolsListResult":{"tools":{"count":27,"names":["tarsee_send_message","tarsee_send_file","tarsee_configure_email_channel","tarsee_send_email_thread","tarsee_schedule_task","tarsee_remember","tarsee_daily_log","tarsee_read_file","tarsee_write_file","tarsee_search_memories","tarsee_search_memories_deep","tarsee_create_canvas","tarsee_create_diagram","tarsee_datetime","tarsee_calculator","tarsee_discord_admin","tarsee_railway","tarsee_browser","tarsee_web_fetch","tarsee_web_search","tarsee_pdf_read","tarsee_get_key","tarsee_set_key","tarsee_list_keys","tarsee_delete_key","tarsee_list_files","tarsee_push_notification"],"keys_of_each":["name","description","inputSchema","execution"],"first":{"name":"tarsee_send_message","description":"Send a message to a channel (Telegram, Discord, WhatsApp, Sl … eplies with In-Reply-To headers, use tarsee_send_email_thread instead. [267 characters]","inputSchema":{"$schema":"http://json-schema.org/draft-07/schema#","type":"object","properties":{"channel":{"type":"string","enum":["telegram","discord","whatsapp","slack","email","web"],"description":"Channel to send to"},"message":{"type":"string","description":"Message text"},"channel_id":{"description":"Specific chat/channel ID (auto-resolved if omitted — required for email)","type":"string"}},"required":["channel","message"]},"execution":{"taskSupport":"forbidden"}}}}}},"systemPrompt":["You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]"],"systemPromptSnapshot":false}}},
+    {"t":5,"bytes":215,"json":{"type":"user","message":{"role":"user","content":[{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"JVBERi0xLjQK"}},{"type":"text","text":"summarise"}]},"parent_tool_use_id":null}}
+   ],
+   "stub_timeline": [
+    {"t":4,"ev":"stdout","type":"control_response","subtype":"success"},
+    {"t":5,"ev":"user-message-read"},
+    {"t":5,"ev":"stdout","type":"system","subtype":"session_state_changed"},
+    {"t":5,"ev":"stdout","type":"system","subtype":"init"},
+    {"t":420,"ev":"stdout","type":"stream_event","subtype":"message_start"},
+    {"t":421,"ev":"stdout","type":"stream_event","subtype":"content_block_start"},
+    {"t":421,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":421,"ev":"stdout","type":"assistant"},
+    {"t":422,"ev":"stdout","type":"stream_event","subtype":"content_block_stop"},
+    {"t":422,"ev":"stdout","type":"stream_event","subtype":"message_delta"},
+    {"t":422,"ev":"stdout","type":"stream_event","subtype":"message_stop"},
+    {"t":423,"ev":"stdout","type":"result","subtype":"success"},
+    {"t":423,"ev":"result-written"},
+    {"t":423,"ev":"stdout","type":"system","subtype":"session_state_changed"},
+    {"t":425,"ev":"stdin-closed"},
+    {"t":425,"ev":"exit","code":0}
+   ],
+   "abort_at_ms": null,
+   "harness_notes": [
+    {"t":654,"event":"sdk stream finished"}
+   ],
+   "sdk_messages_seen_by_tarsee": [
+    "228:system/init",
+    "643:stream_event/message_start",
+    "643:stream_event/content_block_start",
+    "644:stream_event/content_block_delta",
+    "644:assistant",
+    "644:stream_event/content_block_stop",
+    "645:stream_event/message_delta",
+    "645:stream_event/message_stop",
+    "646:result/success"
+   ],
+   "sdk_error_thrown": null,
+   "tarsee_events": [
+    {"t":643,"type":"step","kind":"usage"},
+    {"t":644,"type":"text","content":"stub says hi"},
+    {"t":644,"type":"step","kind":"text"},
+    {"t":645,"type":"step","kind":"usage"},
+    {"t":646,"type":"usage","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"context_input_tokens":10}},
+    {"t":646,"type":"done","stopReason":"end_turn"}
+   ],
+   "tarsee_logs": [
+    {"t":151,"level":"log","text":"[mcp] Creating Tarsee MCP server: 27 tools, names: tarsee_se … t_keys, tarsee_delete_key, tarsee_list_files, tarsee_push_notification [596 characters]"},
+    {"t":158,"level":"log","text":"[claude-code] Starting claude turn in <SCRATCH>\\ws, model: claude-sonnet-5-5, session: new, media: 1"},
+    {"t":228,"level":"log","text":"[claude-code] claude: apiKeySource=none"}
+   ],
+   "run_returned_at_ms": 654
+  },
+  "e-plan-real-mcp-tool-call": {
+   "what": "Tarsee's real in-process MCP server and one tool call over the control channel (tarsee_datetime really ran).",
+   "stub_scenario": "mcp-call",
+   "sdk_query": {
+    "prompt": "say hi",
+    "options": {"cwd":"<SCRATCH>\\ws","model":"claude-sonnet-5-5","tools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"allowedTools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"permissionMode":"bypassPermissions","allowDangerouslySkipPermissions":true,"maxTurns":50,"includePartialMessages":true,"settingSources":["user","project","local"],"strictMcpConfig":false,"additionalDirectories":["<TARSEE_ROOT>\\src\\skills"],"systemPrompt":{"type":"custom","prompt":"You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]","snapshot":false},"abortController":"<AbortController aborted=false>","fallbackModel":"claude-haiku-5-5","mcpServers":{"tarsee":{"type":"sdk","name":"tarsee","instance":"<McpServer>"}},"stderr":"<function>"}
+   },
+   "argv": [
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--max-turns=50",
+    "--model=claude-sonnet-5-5",
+    "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--setting-sources=user,project,local",
+    "--permission-mode=bypassPermissions",
+    "--allow-dangerously-skip-permissions",
+    "--fallback-model=claude-haiku-5-5",
+    "--include-partial-messages",
+    "--add-dir=<TARSEE_ROOT>\\src\\skills"
+   ],
+   "env": {
+    "given_to_sdk": {"BASH_MAX_OUTPUT_LENGTH":"8000","CLAUDE_CODE_AUTO_COMPACT_WINDOW":"180000","CLAUDE_CODE_OAUTH_TOKEN":"<PLAN_OAUTH_TOKEN>","DEBUG":"canary","MAX_MCP_OUTPUT_TOKENS":"3000","MY_VAULT_KEY":"vault-value","NODE_OPTIONS":"--max-old-space-size=2048","VERIFY_PLAIN":"kept"},
+    "added_by_sdk": {"CLAUDE_AGENT_SDK_VERSION":"0.3.319","CLAUDE_CODE_ENTRYPOINT":"sdk-ts","CLAUDE_CODE_SDK_READS_SESSION_STATE":"1"},
+    "removed_by_sdk": ["DEBUG","NODE_OPTIONS"],
+    "changed_by_sdk": [],
+    "filled_in_by_windows_process_start": ["HOMEDRIVE","HOMEPATH","LOGONSERVER","USERDOMAIN","USERNAME"]
+   },
+   "stdin": [
+    {"t":4,"bytes":34135,"json":{"request_id":"2wnysxg7rci","type":"control_request","request":{"subtype":"initialize","sdkMcpServers":["tarsee"],"sdkMcpServerManifests":{"tarsee":{"initializeResult":{"protocolVersion":"2025-11-25","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"tarsee","version":"1.0.0"}},"toolsListResult":{"tools":{"count":27,"names":["tarsee_send_message","tarsee_send_file","tarsee_configure_email_channel","tarsee_send_email_thread","tarsee_schedule_task","tarsee_remember","tarsee_daily_log","tarsee_read_file","tarsee_write_file","tarsee_search_memories","tarsee_search_memories_deep","tarsee_create_canvas","tarsee_create_diagram","tarsee_datetime","tarsee_calculator","tarsee_discord_admin","tarsee_railway","tarsee_browser","tarsee_web_fetch","tarsee_web_search","tarsee_pdf_read","tarsee_get_key","tarsee_set_key","tarsee_list_keys","tarsee_delete_key","tarsee_list_files","tarsee_push_notification"],"keys_of_each":["name","description","inputSchema","execution"],"first":{"name":"tarsee_send_message","description":"Send a message to a channel (Telegram, Discord, WhatsApp, Sl … eplies with In-Reply-To headers, use tarsee_send_email_thread instead. [267 characters]","inputSchema":{"$schema":"http://json-schema.org/draft-07/schema#","type":"object","properties":{"channel":{"type":"string","enum":["telegram","discord","whatsapp","slack","email","web"],"description":"Channel to send to"},"message":{"type":"string","description":"Message text"},"channel_id":{"description":"Specific chat/channel ID (auto-resolved if omitted — required for email)","type":"string"}},"required":["channel","message"]},"execution":{"taskSupport":"forbidden"}}}}}},"systemPrompt":["You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]"],"systemPromptSnapshot":false}}},
+    {"t":6,"bytes":128,"json":{"type":"user","session_id":"","message":{"role":"user","content":[{"type":"text","text":"say hi"}]},"parent_tool_use_id":null}},
+    {"t":18,"bytes":239,"json":{"type":"control_response","response":{"subtype":"success","request_id":"11111111-2222-4333-8444-000000000001","response":{"mcp_response":{"result":{"content":[{"type":"text","text":"2026-11-13T00:30:44.374Z"}]},"jsonrpc":"2.0","id":2}}}}}
+   ],
+   "stub_timeline": [
+    {"t":5,"ev":"stdout","type":"control_response","subtype":"success"},
+    {"t":6,"ev":"user-message-read"},
+    {"t":6,"ev":"stdout","type":"system","subtype":"session_state_changed"},
+    {"t":7,"ev":"stdout","type":"system","subtype":"init"},
+    {"t":7,"ev":"stdout","type":"stream_event","subtype":"message_start"},
+    {"t":7,"ev":"stdout","type":"assistant"},
+    {"t":7,"ev":"stdout","type":"control_request","subtype":"mcp_message"},
+    {"t":18,"ev":"stdout","type":"user"},
+    {"t":19,"ev":"stdout","type":"stream_event","subtype":"message_start"},
+    {"t":19,"ev":"stdout","type":"stream_event","subtype":"content_block_start"},
+    {"t":19,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":20,"ev":"stdout","type":"assistant"},
+    {"t":20,"ev":"stdout","type":"stream_event","subtype":"content_block_stop"},
+    {"t":20,"ev":"stdout","type":"stream_event","subtype":"message_delta"},
+    {"t":20,"ev":"stdout","type":"stream_event","subtype":"message_stop"},
+    {"t":21,"ev":"stdout","type":"result","subtype":"success"},
+    {"t":21,"ev":"stdout","type":"system","subtype":"session_state_changed"},
+    {"t":22,"ev":"stdin-closed"},
+    {"t":22,"ev":"exit","code":0}
+   ],
+   "abort_at_ms": null,
+   "harness_notes": [
+    {"t":107,"event":"sdk stream finished"}
+   ],
+   "sdk_messages_seen_by_tarsee": [
+    "83:system/init",
+    "84:stream_event/message_start",
+    "84:assistant",
+    "95:user",
+    "95:stream_event/message_start",
+    "96:stream_event/content_block_start",
+    "96:stream_event/content_block_delta",
+    "96:assistant",
+    "97:stream_event/content_block_stop",
+    "97:stream_event/message_delta",
+    "97:stream_event/message_stop",
+    "97:result/success"
+   ],
+   "sdk_error_thrown": null,
+   "tarsee_events": [
+    {"t":84,"type":"step","kind":"usage"},
+    {"t":85,"type":"step","kind":"tool_start"},
+    {"t":85,"type":"tool_use","id":"toolu_stub_1","name":"mcp__tarsee__tarsee_datetime","input":{"format":"iso"}},
+    {"t":95,"type":"step","kind":"tool_end"},
+    {"t":95,"type":"tool_result","id":"toolu_stub_1","ok":true,"result":"2026-11-13T00:30:44.374Z"},
+    {"t":95,"type":"step","kind":"usage"},
+    {"t":96,"type":"text","content":"done"},
+    {"t":96,"type":"step","kind":"text"},
+    {"t":97,"type":"step","kind":"usage"},
+    {"t":97,"type":"usage","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"context_input_tokens":10}},
+    {"t":97,"type":"done","stopReason":"end_turn"}
+   ],
+   "tarsee_logs": [
+    {"t":3,"level":"log","text":"[mcp] Creating Tarsee MCP server: 27 tools, names: tarsee_se … t_keys, tarsee_delete_key, tarsee_list_files, tarsee_push_notification [596 characters]"},
+    {"t":5,"level":"log","text":"[claude-code] Starting claude turn in <SCRATCH>\\ws, model: claude-sonnet-5-5, session: new, media: 0"},
+    {"t":83,"level":"log","text":"[claude-code] claude: apiKeySource=none"}
+   ],
+   "run_returned_at_ms": 107
+  },
+  "f-anthropic-budget-maxturns": {
+   "what": "The Anthropic key, maxBudgetUsd 0.5, maxTurns 8.",
+   "stub_scenario": "turn",
+   "sdk_query": {
+    "prompt": "say hi",
+    "options": {"cwd":"<SCRATCH>\\ws","model":"claude-opus-5-5","tools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"allowedTools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"permissionMode":"bypassPermissions","allowDangerouslySkipPermissions":true,"maxTurns":8,"includePartialMessages":true,"settingSources":["project"],"strictMcpConfig":true,"additionalDirectories":["<TARSEE_ROOT>\\src\\skills"],"systemPrompt":{"type":"custom","prompt":"You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]","snapshot":false},"abortController":"<AbortController aborted=false>","fallbackModel":"claude-sonnet-5-5,claude-haiku-5-5","maxBudgetUsd":0.5,"stderr":"<function>"}
+   },
+   "argv": [
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--max-turns=8",
+    "--max-budget-usd=0.5",
+    "--model=claude-opus-5-5",
+    "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--setting-sources=project",
+    "--strict-mcp-config",
+    "--permission-mode=bypassPermissions",
+    "--allow-dangerously-skip-permissions",
+    "--fallback-model=claude-sonnet-5-5,claude-haiku-5-5",
+    "--include-partial-messages",
+    "--add-dir=<TARSEE_ROOT>\\src\\skills"
+   ],
+   "env": {
+    "given_to_sdk": {"ANTHROPIC_API_KEY":"<ANTHROPIC_KEY>","BASH_MAX_OUTPUT_LENGTH":"8000","CLAUDE_CODE_AUTO_COMPACT_WINDOW":"180000","CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST":"1","CLAUDE_CONFIG_DIR":"<SCRATCH>\\state\\.claude-home-anthropic","DEBUG":"canary","MAX_MCP_OUTPUT_TOKENS":"3000","MY_VAULT_KEY":"vault-value","NODE_OPTIONS":"--max-old-space-size=2048","VERIFY_PLAIN":"kept"},
+    "added_by_sdk": {"CLAUDE_AGENT_SDK_VERSION":"0.3.319","CLAUDE_CODE_ENTRYPOINT":"sdk-ts","CLAUDE_CODE_SDK_READS_SESSION_STATE":"1"},
+    "removed_by_sdk": ["DEBUG","NODE_OPTIONS"],
+    "changed_by_sdk": [],
+    "filled_in_by_windows_process_start": ["HOMEDRIVE","HOMEPATH","LOGONSERVER","USERDOMAIN","USERNAME"]
+   },
+   "stdin": [
+    {"t":5,"bytes":3491,"json":{"request_id":"k88xy8ihnc","type":"control_request","request":{"subtype":"initialize","systemPrompt":["You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]"],"systemPromptSnapshot":false}}},
+    {"t":6,"bytes":128,"json":{"type":"user","session_id":"","message":{"role":"user","content":[{"type":"text","text":"say hi"}]},"parent_tool_use_id":null}}
+   ],
+   "stub_timeline": [
+    {"t":5,"ev":"stdout","type":"control_response","subtype":"success"},
+    {"t":6,"ev":"user-message-read"},
+    {"t":6,"ev":"stdout","type":"system","subtype":"session_state_changed"},
+    {"t":7,"ev":"stdout","type":"system","subtype":"init"},
+    {"t":7,"ev":"stdout","type":"stream_event","subtype":"message_start"},
+    {"t":7,"ev":"stdout","type":"stream_event","subtype":"content_block_start"},
+    {"t":8,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":8,"ev":"stdout","type":"assistant"},
+    {"t":8,"ev":"stdout","type":"stream_event","subtype":"content_block_stop"},
+    {"t":8,"ev":"stdout","type":"stream_event","subtype":"message_delta"},
+    {"t":9,"ev":"stdout","type":"stream_event","subtype":"message_stop"},
+    {"t":9,"ev":"stdout","type":"result","subtype":"success"},
+    {"t":9,"ev":"result-written"},
+    {"t":9,"ev":"stdout","type":"system","subtype":"session_state_changed"},
+    {"t":10,"ev":"stdin-closed"},
+    {"t":10,"ev":"exit","code":0}
+   ],
+   "abort_at_ms": null,
+   "harness_notes": [
+    {"t":90,"event":"sdk stream finished"}
+   ],
+   "sdk_messages_seen_by_tarsee": [
+    "79:system/init",
+    "80:stream_event/message_start",
+    "80:stream_event/content_block_start",
+    "80:stream_event/content_block_delta",
+    "80:assistant",
+    "80:stream_event/content_block_stop",
+    "81:stream_event/message_delta",
+    "81:stream_event/message_stop",
+    "81:result/success"
+   ],
+   "sdk_error_thrown": null,
+   "tarsee_events": [
+    {"t":80,"type":"step","kind":"usage"},
+    {"t":80,"type":"text","content":"stub says hi"},
+    {"t":80,"type":"step","kind":"text"},
+    {"t":81,"type":"step","kind":"usage"},
+    {"t":81,"type":"usage","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"context_input_tokens":10},"costUsd":0.0001,"costExact":true},
+    {"t":81,"type":"done","stopReason":"end_turn"}
+   ],
+   "tarsee_logs": [
+    {"t":3,"level":"log","text":"[claude-code] Starting anthropic turn in <SCRATCH>\\ws, model: claude-opus-5-5, session: new, media: 0"},
+    {"t":79,"level":"log","text":"[claude-code] anthropic: apiKeySource=ANTHROPIC_API_KEY"}
+   ],
+   "run_returned_at_ms": 90
+  },
+  "g-deepseek-default": {
+   "what": "DeepSeek's default model, effort medium (not one it takes: left out), maxBudgetUsd 1 (no flag: the SDK does not keep DeepSeek's ceiling).",
+   "stub_scenario": "turn",
+   "sdk_query": {
+    "prompt": "say hi",
+    "options": {"cwd":"<SCRATCH>\\ws","model":"deepseek-flash[1m]","tools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"allowedTools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"permissionMode":"bypassPermissions","allowDangerouslySkipPermissions":true,"maxTurns":50,"includePartialMessages":true,"settingSources":["project"],"strictMcpConfig":true,"additionalDirectories":["<TARSEE_ROOT>\\src\\skills"],"systemPrompt":{"type":"custom","prompt":"You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]","snapshot":false},"abortController":"<AbortController aborted=false>","stderr":"<function>"}
+   },
+   "argv": [
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--max-turns=50",
+    "--model=deepseek-flash[1m]",
+    "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--setting-sources=project",
+    "--strict-mcp-config",
+    "--permission-mode=bypassPermissions",
+    "--allow-dangerously-skip-permissions",
+    "--include-partial-messages",
+    "--add-dir=<TARSEE_ROOT>\\src\\skills"
+   ],
+   "env": {
+    "given_to_sdk": {"ANTHROPIC_API_KEY":"","ANTHROPIC_AUTH_TOKEN":"<DEEPSEEK_KEY>","ANTHROPIC_BASE_URL":"https://api.deepseek.com/anthropic","ANTHROPIC_DEFAULT_FABLE_MODEL":"deepseek-v4-pro[1m]","ANTHROPIC_DEFAULT_HAIKU_MODEL":"deepseek-flash[1m]","ANTHROPIC_DEFAULT_OPUS_MODEL":"deepseek-v4-pro[1m]","ANTHROPIC_DEFAULT_SONNET_MODEL":"deepseek-flash[1m]","ANTHROPIC_MODEL":"deepseek-flash[1m]","ANTHROPIC_SMALL_FAST_MODEL":"deepseek-flash[1m]","BASH_MAX_OUTPUT_LENGTH":"8000","CLAUDE_CODE_ATTRIBUTION_HEADER":"0","CLAUDE_CODE_AUTO_COMPACT_WINDOW":"180000","CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS":"1","CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC":"1","CLAUDE_CODE_MAX_CONTEXT_TOKENS":"1000000","CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST":"1","CLAUDE_CODE_SUBAGENT_MODEL":"deepseek-flash[1m]","CLAUDE_CONFIG_DIR":"<SCRATCH>\\state\\.claude-home-deepseek","DEBUG":"canary","MAX_MCP_OUTPUT_TOKENS":"3000","MY_VAULT_KEY":"vault-value","NODE_OPTIONS":"--max-old-space-size=2048","VERIFY_PLAIN":"kept"},
+    "added_by_sdk": {"CLAUDE_AGENT_SDK_VERSION":"0.3.319","CLAUDE_CODE_ENTRYPOINT":"sdk-ts","CLAUDE_CODE_SDK_READS_SESSION_STATE":"1"},
+    "removed_by_sdk": ["DEBUG","NODE_OPTIONS"],
+    "changed_by_sdk": [],
+    "filled_in_by_windows_process_start": ["HOMEDRIVE","HOMEPATH","LOGONSERVER","USERDOMAIN","USERNAME"]
+   },
+   "stdin": [
+    {"t":6,"bytes":3492,"json":{"request_id":"bm9r5mj7g7v","type":"control_request","request":{"subtype":"initialize","systemPrompt":["You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]"],"systemPromptSnapshot":false}}},
+    {"t":7,"bytes":128,"json":{"type":"user","session_id":"","message":{"role":"user","content":[{"type":"text","text":"say hi"}]},"parent_tool_use_id":null}}
+   ],
+   "stub_timeline": [
+    {"t":6,"ev":"stdout","type":"control_response","subtype":"success"},
+    {"t":7,"ev":"user-message-read"},
+    {"t":8,"ev":"stdout","type":"system","subtype":"session_state_changed"},
+    {"t":8,"ev":"stdout","type":"system","subtype":"init"},
+    {"t":9,"ev":"stdout","type":"stream_event","subtype":"message_start"},
+    {"t":9,"ev":"stdout","type":"stream_event","subtype":"content_block_start"},
+    {"t":9,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":10,"ev":"stdout","type":"assistant"},
+    {"t":10,"ev":"stdout","type":"stream_event","subtype":"content_block_stop"},
+    {"t":10,"ev":"stdout","type":"stream_event","subtype":"message_delta"},
+    {"t":10,"ev":"stdout","type":"stream_event","subtype":"message_stop"},
+    {"t":11,"ev":"stdout","type":"result","subtype":"success"},
+    {"t":11,"ev":"result-written"},
+    {"t":12,"ev":"stdout","type":"system","subtype":"session_state_changed"},
+    {"t":12,"ev":"stdin-closed"},
+    {"t":13,"ev":"exit","code":0}
+   ],
+   "abort_at_ms": null,
+   "harness_notes": [
+    {"t":95,"event":"sdk stream finished"}
+   ],
+   "sdk_messages_seen_by_tarsee": [
+    "82:system/init",
+    "82:stream_event/message_start",
+    "83:stream_event/content_block_start",
+    "83:stream_event/content_block_delta",
+    "83:assistant",
+    "83:stream_event/content_block_stop",
+    "83:stream_event/message_delta",
+    "84:stream_event/message_stop",
+    "84:result/success"
+   ],
+   "sdk_error_thrown": null,
+   "tarsee_events": [
+    {"t":82,"type":"step","kind":"usage"},
+    {"t":83,"type":"text","content":"stub says hi"},
+    {"t":83,"type":"step","kind":"text"},
+    {"t":83,"type":"step","kind":"usage"},
+    {"t":85,"type":"usage","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"context_input_tokens":10}},
+    {"t":85,"type":"done","stopReason":"end_turn"}
+   ],
+   "tarsee_logs": [
+    {"t":2,"level":"log","text":"[claude-code] Starting deepseek turn in <SCRATCH>\\ws, model: deepseek-flash[1m], session: new, media: 0"},
+    {"t":82,"level":"log","text":"[claude-code] deepseek: apiKeySource=none"}
+   ],
+   "run_returned_at_ms": 95
+  },
+  "h-deepseek-pro-max-resume": {
+   "what": "DeepSeek Pro, effort max, resuming.",
+   "stub_scenario": "turn",
+   "sdk_query": {
+    "prompt": "say hi",
+    "options": {"cwd":"<SCRATCH>\\ws","model":"deepseek-v4-pro[1m]","tools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"allowedTools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"permissionMode":"bypassPermissions","allowDangerouslySkipPermissions":true,"maxTurns":50,"includePartialMessages":true,"settingSources":["project"],"strictMcpConfig":true,"additionalDirectories":["<TARSEE_ROOT>\\src\\skills"],"systemPrompt":{"type":"custom","prompt":"You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]","snapshot":false},"abortController":"<AbortController aborted=false>","resume":"0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d","fallbackModel":"deepseek-flash[1m]","effort":"max","stderr":"<function>"}
+   },
+   "argv": [
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--effort=max",
+    "--max-turns=50",
+    "--model=deepseek-v4-pro[1m]",
+    "--resume=0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+    "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--setting-sources=project",
+    "--strict-mcp-config",
+    "--permission-mode=bypassPermissions",
+    "--allow-dangerously-skip-permissions",
+    "--fallback-model=deepseek-flash[1m]",
+    "--include-partial-messages",
+    "--add-dir=<TARSEE_ROOT>\\src\\skills"
+   ],
+   "env": {
+    "given_to_sdk": {"ANTHROPIC_API_KEY":"","ANTHROPIC_AUTH_TOKEN":"<DEEPSEEK_KEY>","ANTHROPIC_BASE_URL":"https://api.deepseek.com/anthropic","ANTHROPIC_DEFAULT_FABLE_MODEL":"deepseek-v4-pro[1m]","ANTHROPIC_DEFAULT_HAIKU_MODEL":"deepseek-flash[1m]","ANTHROPIC_DEFAULT_OPUS_MODEL":"deepseek-v4-pro[1m]","ANTHROPIC_DEFAULT_SONNET_MODEL":"deepseek-flash[1m]","ANTHROPIC_MODEL":"deepseek-v4-pro[1m]","ANTHROPIC_SMALL_FAST_MODEL":"deepseek-flash[1m]","BASH_MAX_OUTPUT_LENGTH":"8000","CLAUDE_CODE_ATTRIBUTION_HEADER":"0","CLAUDE_CODE_AUTO_COMPACT_WINDOW":"180000","CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS":"1","CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC":"1","CLAUDE_CODE_MAX_CONTEXT_TOKENS":"1000000","CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST":"1","CLAUDE_CODE_SUBAGENT_MODEL":"deepseek-v4-pro[1m]","CLAUDE_CONFIG_DIR":"<SCRATCH>\\state\\.claude-home-deepseek","DEBUG":"canary","MAX_MCP_OUTPUT_TOKENS":"3000","MY_VAULT_KEY":"vault-value","NODE_OPTIONS":"--max-old-space-size=2048","VERIFY_PLAIN":"kept"},
+    "added_by_sdk": {"CLAUDE_AGENT_SDK_VERSION":"0.3.319","CLAUDE_CODE_ENTRYPOINT":"sdk-ts","CLAUDE_CODE_SDK_READS_SESSION_STATE":"1"},
+    "removed_by_sdk": ["DEBUG","NODE_OPTIONS"],
+    "changed_by_sdk": [],
+    "filled_in_by_windows_process_start": ["HOMEDRIVE","HOMEPATH","LOGONSERVER","USERDOMAIN","USERNAME"]
+   },
+   "stdin": [
+    {"t":4,"bytes":3492,"json":{"request_id":"bf5iwk56ghu","type":"control_request","request":{"subtype":"initialize","systemPrompt":["You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]"],"systemPromptSnapshot":false}}},
+    {"t":5,"bytes":128,"json":{"type":"user","session_id":"","message":{"role":"user","content":[{"type":"text","text":"say hi"}]},"parent_tool_use_id":null}}
+   ],
+   "stub_timeline": [
+    {"t":5,"ev":"stdout","type":"control_response","subtype":"success"},
+    {"t":6,"ev":"user-message-read"},
+    {"t":6,"ev":"stdout","type":"system","subtype":"session_state_changed"},
+    {"t":6,"ev":"stdout","type":"system","subtype":"init"},
+    {"t":6,"ev":"stdout","type":"stream_event","subtype":"message_start"},
+    {"t":7,"ev":"stdout","type":"stream_event","subtype":"content_block_start"},
+    {"t":7,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":7,"ev":"stdout","type":"assistant"},
+    {"t":7,"ev":"stdout","type":"stream_event","subtype":"content_block_stop"},
+    {"t":8,"ev":"stdout","type":"stream_event","subtype":"message_delta"},
+    {"t":8,"ev":"stdout","type":"stream_event","subtype":"message_stop"},
+    {"t":8,"ev":"stdout","type":"result","subtype":"success"},
+    {"t":8,"ev":"result-written"},
+    {"t":9,"ev":"stdout","type":"system","subtype":"session_state_changed"},
+    {"t":9,"ev":"stdin-closed"},
+    {"t":9,"ev":"exit","code":0}
+   ],
+   "abort_at_ms": null,
+   "harness_notes": [
+    {"t":98,"event":"sdk stream finished"}
+   ],
+   "sdk_messages_seen_by_tarsee": [
+    "84:system/init",
+    "84:stream_event/message_start",
+    "84:stream_event/content_block_start",
+    "84:stream_event/content_block_delta",
+    "85:assistant",
+    "85:stream_event/content_block_stop",
+    "85:stream_event/message_delta",
+    "85:stream_event/message_stop",
+    "86:result/success"
+   ],
+   "sdk_error_thrown": null,
+   "tarsee_events": [
+    {"t":84,"type":"step","kind":"usage"},
+    {"t":84,"type":"text","content":"stub says hi"},
+    {"t":85,"type":"step","kind":"text"},
+    {"t":85,"type":"step","kind":"usage"},
+    {"t":86,"type":"usage","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"context_input_tokens":10}},
+    {"t":86,"type":"done","stopReason":"end_turn"}
+   ],
+   "tarsee_logs": [
+    {"t":2,"level":"log","text":"[claude-code] Starting deepseek turn in <SCRATCH>\\ws, model: deepseek-v4-pro[1m], session: 0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d, media: 0"},
+    {"t":84,"level":"log","text":"[claude-code] deepseek: apiKeySource=none"}
+   ],
+   "run_returned_at_ms": 98
+  },
+  "i-openrouter-title-referer": {
+   "what": "OpenRouter with a title and a referer from Settings.",
+   "stub_scenario": "turn",
+   "sdk_query": {
+    "prompt": "say hi",
+    "options": {"cwd":"<SCRATCH>\\ws","model":"anthropic/claude-sonnet-5","tools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"allowedTools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"permissionMode":"bypassPermissions","allowDangerouslySkipPermissions":true,"maxTurns":50,"includePartialMessages":true,"settingSources":["project"],"strictMcpConfig":true,"additionalDirectories":["<TARSEE_ROOT>\\src\\skills"],"systemPrompt":{"type":"custom","prompt":"You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]","snapshot":false},"abortController":"<AbortController aborted=false>","stderr":"<function>"}
+   },
+   "argv": [
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--max-turns=50",
+    "--model=anthropic/claude-sonnet-5",
+    "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--setting-sources=project",
+    "--strict-mcp-config",
+    "--permission-mode=bypassPermissions",
+    "--allow-dangerously-skip-permissions",
+    "--include-partial-messages",
+    "--add-dir=<TARSEE_ROOT>\\src\\skills"
+   ],
+   "env": {
+    "given_to_sdk": {"ANTHROPIC_API_KEY":"","ANTHROPIC_AUTH_TOKEN":"<OPENROUTER_KEY>","ANTHROPIC_BASE_URL":"https://openrouter.ai/api","ANTHROPIC_CUSTOM_HEADERS":"X-OpenRouter-Title: My Title\nHTTP-Referer: https://example.invalid/app","ANTHROPIC_DEFAULT_FABLE_MODEL":"~anthropic/claude-opus-latest","ANTHROPIC_DEFAULT_HAIKU_MODEL":"~anthropic/claude-haiku-latest","ANTHROPIC_DEFAULT_OPUS_MODEL":"~anthropic/claude-opus-latest","ANTHROPIC_DEFAULT_SONNET_MODEL":"~anthropic/claude-sonnet-latest","ANTHROPIC_MODEL":"anthropic/claude-sonnet-5","ANTHROPIC_SMALL_FAST_MODEL":"~anthropic/claude-haiku-latest","BASH_MAX_OUTPUT_LENGTH":"8000","CLAUDE_CODE_ATTRIBUTION_HEADER":"0","CLAUDE_CODE_AUTO_COMPACT_WINDOW":"180000","CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS":"1","CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC":"1","CLAUDE_CODE_MAX_CONTEXT_TOKENS":"200000","CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST":"1","CLAUDE_CODE_SUBAGENT_MODEL":"anthropic/claude-sonnet-5","CLAUDE_CONFIG_DIR":"<SCRATCH>\\state\\.claude-home-openrouter","DEBUG":"canary","MAX_MCP_OUTPUT_TOKENS":"3000","MY_VAULT_KEY":"vault-value","NODE_OPTIONS":"--max-old-space-size=2048","VERIFY_PLAIN":"kept"},
+    "added_by_sdk": {"CLAUDE_AGENT_SDK_VERSION":"0.3.319","CLAUDE_CODE_ENTRYPOINT":"sdk-ts","CLAUDE_CODE_SDK_READS_SESSION_STATE":"1"},
+    "removed_by_sdk": ["DEBUG","NODE_OPTIONS"],
+    "changed_by_sdk": [],
+    "filled_in_by_windows_process_start": ["HOMEDRIVE","HOMEPATH","LOGONSERVER","USERDOMAIN","USERNAME"]
+   },
+   "stdin": [
+    {"t":6,"bytes":3491,"json":{"request_id":"ffkusiim8z","type":"control_request","request":{"subtype":"initialize","systemPrompt":["You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]"],"systemPromptSnapshot":false}}},
+    {"t":7,"bytes":128,"json":{"type":"user","session_id":"","message":{"role":"user","content":[{"type":"text","text":"say hi"}]},"parent_tool_use_id":null}}
+   ],
+   "stub_timeline": [
+    {"t":6,"ev":"stdout","type":"control_response","subtype":"success"},
+    {"t":7,"ev":"user-message-read"},
+    {"t":7,"ev":"stdout","type":"system","subtype":"session_state_changed"},
+    {"t":8,"ev":"stdout","type":"system","subtype":"init"},
+    {"t":8,"ev":"stdout","type":"stream_event","subtype":"message_start"},
+    {"t":8,"ev":"stdout","type":"stream_event","subtype":"content_block_start"},
+    {"t":9,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":9,"ev":"stdout","type":"assistant"},
+    {"t":9,"ev":"stdout","type":"stream_event","subtype":"content_block_stop"},
+    {"t":10,"ev":"stdout","type":"stream_event","subtype":"message_delta"},
+    {"t":10,"ev":"stdout","type":"stream_event","subtype":"message_stop"},
+    {"t":10,"ev":"stdout","type":"result","subtype":"success"},
+    {"t":10,"ev":"result-written"},
+    {"t":11,"ev":"stdout","type":"system","subtype":"session_state_changed"},
+    {"t":11,"ev":"stdin-closed"},
+    {"t":12,"ev":"exit","code":0}
+   ],
+   "abort_at_ms": null,
+   "harness_notes": [
+    {"t":133,"event":"sdk stream finished"}
+   ],
+   "sdk_messages_seen_by_tarsee": [
+    "120:system/init",
+    "120:stream_event/message_start",
+    "121:stream_event/content_block_start",
+    "121:stream_event/content_block_delta",
+    "121:assistant",
+    "121:stream_event/content_block_stop",
+    "122:stream_event/message_delta",
+    "122:stream_event/message_stop",
+    "122:result/success"
+   ],
+   "sdk_error_thrown": null,
+   "tarsee_events": [
+    {"t":120,"type":"step","kind":"usage"},
+    {"t":121,"type":"text","content":"stub says hi"},
+    {"t":121,"type":"step","kind":"text"},
+    {"t":122,"type":"step","kind":"usage"},
+    {"t":123,"type":"usage","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"context_input_tokens":10}},
+    {"t":123,"type":"done","stopReason":"end_turn"}
+   ],
+   "tarsee_logs": [
+    {"t":3,"level":"log","text":"[claude-code] Starting openrouter turn in <SCRATCH>\\ws, model: anthropic/claude-sonnet-5, session: new, media: 0"},
+    {"t":120,"level":"log","text":"[claude-code] openrouter: apiKeySource=none"}
+   ],
+   "run_returned_at_ms": 133
+  },
+  "j-http-mcp-through-sdk": {
+   "what": "Not the Node behaviour: an HTTP MCP server config handed to the SDK, for the --mcp-config arguments.",
+   "stub_scenario": "turn",
+   "sdk_query": {
+    "prompt": "say hi",
+    "options": {"cwd":"<SCRATCH>\\ws","model":"deepseek-flash[1m]","tools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"allowedTools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"permissionMode":"bypassPermissions","allowDangerouslySkipPermissions":true,"maxTurns":50,"includePartialMessages":true,"settingSources":["project"],"strictMcpConfig":true,"additionalDirectories":["<TARSEE_ROOT>\\src\\skills"],"systemPrompt":{"type":"custom","prompt":"You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]","snapshot":false},"abortController":"<AbortController aborted=false>","stderr":"<function>","mcpServers":{"tarsee":{"type":"http","url":"http://127.0.0.1:45678/mcp","headers":{"Authorization":"Bearer ${TARSEE_MCP_TOKEN}"},"alwaysLoad":true}}}
+   },
+   "argv": [
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--max-turns=50",
+    "--model=deepseek-flash[1m]",
+    "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--mcp-config",
+    "{\"mcpServers\":{\"tarsee\":{\"type\":\"http\",\"url\":\"http://127.0.0.1:45678/mcp\",\"headers\":{\"Authorization\":\"Bearer ${TARSEE_MCP_TOKEN}\"},\"alwaysLoad\":true}}}",
+    "--setting-sources=project",
+    "--strict-mcp-config",
+    "--permission-mode=bypassPermissions",
+    "--allow-dangerously-skip-permissions",
+    "--include-partial-messages",
+    "--add-dir=<TARSEE_ROOT>\\src\\skills"
+   ],
+   "env": {
+    "given_to_sdk": {"ANTHROPIC_API_KEY":"","ANTHROPIC_AUTH_TOKEN":"<DEEPSEEK_KEY>","ANTHROPIC_BASE_URL":"https://api.deepseek.com/anthropic","ANTHROPIC_DEFAULT_FABLE_MODEL":"deepseek-v4-pro[1m]","ANTHROPIC_DEFAULT_HAIKU_MODEL":"deepseek-flash[1m]","ANTHROPIC_DEFAULT_OPUS_MODEL":"deepseek-v4-pro[1m]","ANTHROPIC_DEFAULT_SONNET_MODEL":"deepseek-flash[1m]","ANTHROPIC_MODEL":"deepseek-flash[1m]","ANTHROPIC_SMALL_FAST_MODEL":"deepseek-flash[1m]","BASH_MAX_OUTPUT_LENGTH":"8000","CLAUDE_CODE_ATTRIBUTION_HEADER":"0","CLAUDE_CODE_AUTO_COMPACT_WINDOW":"180000","CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS":"1","CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC":"1","CLAUDE_CODE_MAX_CONTEXT_TOKENS":"1000000","CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST":"1","CLAUDE_CODE_SUBAGENT_MODEL":"deepseek-flash[1m]","CLAUDE_CONFIG_DIR":"<SCRATCH>\\state\\.claude-home-deepseek","DEBUG":"canary","MAX_MCP_OUTPUT_TOKENS":"3000","MY_VAULT_KEY":"vault-value","NODE_OPTIONS":"--max-old-space-size=2048","VERIFY_PLAIN":"kept"},
+    "added_by_sdk": {"CLAUDE_AGENT_SDK_VERSION":"0.3.319","CLAUDE_CODE_ENTRYPOINT":"sdk-ts","CLAUDE_CODE_SDK_READS_SESSION_STATE":"1"},
+    "removed_by_sdk": ["DEBUG","NODE_OPTIONS"],
+    "changed_by_sdk": [],
+    "filled_in_by_windows_process_start": ["HOMEDRIVE","HOMEPATH","LOGONSERVER","USERDOMAIN","USERNAME"]
+   },
+   "stdin": [
+    {"t":8,"bytes":3492,"json":{"request_id":"u5q2tftygwf","type":"control_request","request":{"subtype":"initialize","systemPrompt":["You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]"],"systemPromptSnapshot":false}}},
+    {"t":10,"bytes":128,"json":{"type":"user","session_id":"","message":{"role":"user","content":[{"type":"text","text":"say hi"}]},"parent_tool_use_id":null}}
+   ],
+   "stub_timeline": [
+    {"t":9,"ev":"stdout","type":"control_response","subtype":"success"},
+    {"t":10,"ev":"user-message-read"},
+    {"t":10,"ev":"stdout","type":"system","subtype":"session_state_changed"},
+    {"t":11,"ev":"stdout","type":"system","subtype":"init"},
+    {"t":12,"ev":"stdout","type":"stream_event","subtype":"message_start"},
+    {"t":12,"ev":"stdout","type":"stream_event","subtype":"content_block_start"},
+    {"t":13,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":13,"ev":"stdout","type":"assistant"},
+    {"t":13,"ev":"stdout","type":"stream_event","subtype":"content_block_stop"},
+    {"t":14,"ev":"stdout","type":"stream_event","subtype":"message_delta"},
+    {"t":14,"ev":"stdout","type":"stream_event","subtype":"message_stop"},
+    {"t":15,"ev":"stdout","type":"result","subtype":"success"},
+    {"t":16,"ev":"result-written"},
+    {"t":16,"ev":"stdout","type":"system","subtype":"session_state_changed"},
+    {"t":17,"ev":"stdin-closed"},
+    {"t":18,"ev":"exit","code":0}
+   ],
+   "abort_at_ms": null,
+   "harness_notes": [
+    {"t":154,"event":"sdk stream finished"}
+   ],
+   "sdk_messages_seen_by_tarsee": [
+    "128:system/init",
+    "130:stream_event/message_start",
+    "130:stream_event/content_block_start",
+    "130:stream_event/content_block_delta",
+    "131:assistant",
+    "131:stream_event/content_block_stop",
+    "131:stream_event/message_delta",
+    "132:stream_event/message_stop",
+    "133:result/success"
+   ],
+   "sdk_error_thrown": null,
+   "tarsee_events": [
+    {"t":130,"type":"step","kind":"usage"},
+    {"t":130,"type":"text","content":"stub says hi"},
+    {"t":131,"type":"step","kind":"text"},
+    {"t":131,"type":"step","kind":"usage"},
+    {"t":133,"type":"usage","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"context_input_tokens":10}},
+    {"t":133,"type":"done","stopReason":"end_turn"}
+   ],
+   "tarsee_logs": [
+    {"t":1,"level":"log","text":"[claude-code] Starting deepseek turn in <SCRATCH>\\ws, model: deepseek-flash[1m], session: new, media: 0"},
+    {"t":128,"level":"log","text":"[claude-code] deepseek: apiKeySource=none"}
+   ],
+   "run_returned_at_ms": 154
+  },
+  "k-stop-hang": {
+   "what": "Stop at about 600 ms with a program that never exits and writes nothing more: stdin closed, the process ended by the SDK 7 s later, done{aborted} only then.",
+   "stub_scenario": "hang",
+   "sdk_query": {
+    "prompt": "say hi",
+    "options": {"cwd":"<SCRATCH>\\ws","model":"claude-sonnet-5-5","tools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"allowedTools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"permissionMode":"bypassPermissions","allowDangerouslySkipPermissions":true,"maxTurns":50,"includePartialMessages":true,"settingSources":["user","project","local"],"strictMcpConfig":false,"additionalDirectories":["<TARSEE_ROOT>\\src\\skills"],"systemPrompt":{"type":"custom","prompt":"You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]","snapshot":false},"abortController":"<AbortController aborted=false>","fallbackModel":"claude-haiku-5-5","stderr":"<function>","onProcessSpawned":"<function>"}
+   },
+   "argv": [
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--max-turns=50",
+    "--model=claude-sonnet-5-5",
+    "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--setting-sources=user,project,local",
+    "--permission-mode=bypassPermissions",
+    "--allow-dangerously-skip-permissions",
+    "--fallback-model=claude-haiku-5-5",
+    "--include-partial-messages",
+    "--add-dir=<TARSEE_ROOT>\\src\\skills"
+   ],
+   "env": {
+    "given_to_sdk": {"BASH_MAX_OUTPUT_LENGTH":"8000","CLAUDE_CODE_AUTO_COMPACT_WINDOW":"180000","CLAUDE_CODE_OAUTH_TOKEN":"<PLAN_OAUTH_TOKEN>","DEBUG":"canary","MAX_MCP_OUTPUT_TOKENS":"3000","MY_VAULT_KEY":"vault-value","NODE_OPTIONS":"--max-old-space-size=2048","VERIFY_PLAIN":"kept"},
+    "added_by_sdk": {"CLAUDE_AGENT_SDK_VERSION":"0.3.319","CLAUDE_CODE_ENTRYPOINT":"sdk-ts","CLAUDE_CODE_SDK_READS_SESSION_STATE":"1"},
+    "removed_by_sdk": ["DEBUG","NODE_OPTIONS"],
+    "changed_by_sdk": [],
+    "filled_in_by_windows_process_start": ["HOMEDRIVE","HOMEPATH","LOGONSERVER","USERDOMAIN","USERNAME"]
+   },
+   "stdin": [
+    {"t":8,"bytes":3491,"json":{"request_id":"pdmrsdfkh4","type":"control_request","request":{"subtype":"initialize","systemPrompt":["You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]"],"systemPromptSnapshot":false}}},
+    {"t":10,"bytes":128,"json":{"type":"user","session_id":"","message":{"role":"user","content":[{"type":"text","text":"say hi"}]},"parent_tool_use_id":null}}
+   ],
+   "stub_timeline": [
+    {"t":9,"ev":"stdout","type":"control_response","subtype":"success"},
+    {"t":11,"ev":"user-message-read"},
+    {"t":11,"ev":"stdout","type":"system","subtype":"session_state_changed"},
+    {"t":12,"ev":"stdout","type":"system","subtype":"init"},
+    {"t":12,"ev":"stdout","type":"stream_event","subtype":"message_start"},
+    {"t":12,"ev":"stdout","type":"stream_event","subtype":"content_block_start"},
+    {"t":13,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":312,"ev":"stdin-closed"},
+    {"t":7342,"ev":"exit","code":null,"why":"launcher gone"}
+   ],
+   "abort_at_ms": 603,
+   "harness_notes": [
+    {"t":88,"event":"process started, pid known"},
+    {"t":7627,"event":"process gone (polled every 10 ms)"},
+    {"t":7705,"event":"sdk stream finished"}
+   ],
+   "sdk_messages_seen_by_tarsee": [
+    "306:system/init",
+    "306:stream_event/message_start",
+    "307:stream_event/content_block_start",
+    "307:stream_event/content_block_delta"
+   ],
+   "sdk_error_thrown": {
+    "t": 7705,
+    "name": "Error",
+    "message": "Claude Code process aborted by user"
+   },
+   "tarsee_events": [
+    {"t":307,"type":"step","kind":"usage"},
+    {"t":307,"type":"text","content":"partial"},
+    {"t":7705,"type":"done","stopReason":"aborted"}
+   ],
+   "tarsee_logs": [
+    {"t":31,"level":"log","text":"[claude-code] Starting claude turn in <SCRATCH>\\ws, model: claude-sonnet-5-5, session: new, media: 0"},
+    {"t":306,"level":"log","text":"[claude-code] claude: apiKeySource=none"},
+    {"t":7705,"level":"log","text":"[claude-code] Turn stopped."}
+   ],
+   "run_returned_at_ms": 7705
+  },
+  "l-stop-hang-then-more": {
+   "what": "Stop with a program that never exits and keeps writing: the loop breaks on the next message, done{aborted} 2 s later, the process ended 7 s after the stop.",
+   "stub_scenario": "hang-then-more",
+   "sdk_query": {
+    "prompt": "say hi",
+    "options": {"cwd":"<SCRATCH>\\ws","model":"claude-sonnet-5-5","tools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"allowedTools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"permissionMode":"bypassPermissions","allowDangerouslySkipPermissions":true,"maxTurns":50,"includePartialMessages":true,"settingSources":["user","project","local"],"strictMcpConfig":false,"additionalDirectories":["<TARSEE_ROOT>\\src\\skills"],"systemPrompt":{"type":"custom","prompt":"You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]","snapshot":false},"abortController":"<AbortController aborted=false>","fallbackModel":"claude-haiku-5-5","stderr":"<function>","onProcessSpawned":"<function>"}
+   },
+   "argv": [
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--max-turns=50",
+    "--model=claude-sonnet-5-5",
+    "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--setting-sources=user,project,local",
+    "--permission-mode=bypassPermissions",
+    "--allow-dangerously-skip-permissions",
+    "--fallback-model=claude-haiku-5-5",
+    "--include-partial-messages",
+    "--add-dir=<TARSEE_ROOT>\\src\\skills"
+   ],
+   "env": {
+    "given_to_sdk": {"BASH_MAX_OUTPUT_LENGTH":"8000","CLAUDE_CODE_AUTO_COMPACT_WINDOW":"180000","CLAUDE_CODE_OAUTH_TOKEN":"<PLAN_OAUTH_TOKEN>","DEBUG":"canary","MAX_MCP_OUTPUT_TOKENS":"3000","MY_VAULT_KEY":"vault-value","NODE_OPTIONS":"--max-old-space-size=2048","VERIFY_PLAIN":"kept"},
+    "added_by_sdk": {"CLAUDE_AGENT_SDK_VERSION":"0.3.319","CLAUDE_CODE_ENTRYPOINT":"sdk-ts","CLAUDE_CODE_SDK_READS_SESSION_STATE":"1"},
+    "removed_by_sdk": ["DEBUG","NODE_OPTIONS"],
+    "changed_by_sdk": [],
+    "filled_in_by_windows_process_start": ["HOMEDRIVE","HOMEPATH","LOGONSERVER","USERDOMAIN","USERNAME"]
+   },
+   "stdin": [
+    {"t":61,"bytes":3491,"json":{"request_id":"xharqelvl7","type":"control_request","request":{"subtype":"initialize","systemPrompt":["You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]"],"systemPromptSnapshot":false}}},
+    {"t":63,"bytes":128,"json":{"type":"user","session_id":"","message":{"role":"user","content":[{"type":"text","text":"say hi"}]},"parent_tool_use_id":null}}
+   ],
+   "stub_timeline": [
+    {"t":61,"ev":"stdout","type":"control_response","subtype":"success"},
+    {"t":63,"ev":"user-message-read"},
+    {"t":63,"ev":"stdout","type":"system","subtype":"session_state_changed"},
+    {"t":64,"ev":"stdout","type":"system","subtype":"init"},
+    {"t":64,"ev":"stdout","type":"stream_event","subtype":"message_start"},
+    {"t":65,"ev":"stdout","type":"stream_event","subtype":"content_block_start"},
+    {"t":90,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":143,"ev":"stdin-closed"},
+    {"t":343,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":550,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":750,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":950,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":1164,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":1366,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":1566,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":1769,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":1982,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":2196,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":2397,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":2598,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":2799,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":3013,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":3227,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":3427,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":3641,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":3843,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":4043,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":4257,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":4470,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":4685,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":4899,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":5112,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":5326,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":5539,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":5753,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":5966,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":6179,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":6384,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":6590,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":6788,"ev":"exit","code":null,"why":"launcher gone"}
+   ],
+   "abort_at_ms": 651,
+   "harness_notes": [
+    {"t":232,"event":"process started, pid known"},
+    {"t":2969,"event":"sdk stream finished"},
+    {"t":7681,"event":"process gone (polled every 10 ms)"}
+   ],
+   "sdk_messages_seen_by_tarsee": [
+    "964:system/init"
+   ],
+   "sdk_error_thrown": null,
+   "tarsee_events": [
+    {"t":2969,"type":"done","stopReason":"aborted"}
+   ],
+   "tarsee_logs": [
+    {"t":10,"level":"log","text":"[claude-code] Starting claude turn in <SCRATCH>\\ws, model: claude-sonnet-5-5, session: new, media: 0"},
+    {"t":2969,"level":"log","text":"[claude-code] Turn stopped."}
+   ],
+   "run_returned_at_ms": 2969
+  },
+  "m-stop-exits-on-stdin-close": {
+   "what": "Stop with a program that exits when stdin closes.",
+   "stub_scenario": "exit-on-stdin-close",
+   "sdk_query": {
+    "prompt": "say hi",
+    "options": {"cwd":"<SCRATCH>\\ws","model":"claude-sonnet-5-5","tools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"allowedTools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"permissionMode":"bypassPermissions","allowDangerouslySkipPermissions":true,"maxTurns":50,"includePartialMessages":true,"settingSources":["user","project","local"],"strictMcpConfig":false,"additionalDirectories":["<TARSEE_ROOT>\\src\\skills"],"systemPrompt":{"type":"custom","prompt":"You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]","snapshot":false},"abortController":"<AbortController aborted=false>","fallbackModel":"claude-haiku-5-5","stderr":"<function>"}
+   },
+   "argv": [
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--max-turns=50",
+    "--model=claude-sonnet-5-5",
+    "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--setting-sources=user,project,local",
+    "--permission-mode=bypassPermissions",
+    "--allow-dangerously-skip-permissions",
+    "--fallback-model=claude-haiku-5-5",
+    "--include-partial-messages",
+    "--add-dir=<TARSEE_ROOT>\\src\\skills"
+   ],
+   "env": {
+    "given_to_sdk": {"BASH_MAX_OUTPUT_LENGTH":"8000","CLAUDE_CODE_AUTO_COMPACT_WINDOW":"180000","CLAUDE_CODE_OAUTH_TOKEN":"<PLAN_OAUTH_TOKEN>","DEBUG":"canary","MAX_MCP_OUTPUT_TOKENS":"3000","MY_VAULT_KEY":"vault-value","NODE_OPTIONS":"--max-old-space-size=2048","VERIFY_PLAIN":"kept"},
+    "added_by_sdk": {"CLAUDE_AGENT_SDK_VERSION":"0.3.319","CLAUDE_CODE_ENTRYPOINT":"sdk-ts","CLAUDE_CODE_SDK_READS_SESSION_STATE":"1"},
+    "removed_by_sdk": ["DEBUG","NODE_OPTIONS"],
+    "changed_by_sdk": [],
+    "filled_in_by_windows_process_start": ["HOMEDRIVE","HOMEPATH","LOGONSERVER","USERDOMAIN","USERNAME"]
+   },
+   "stdin": [
+    {"t":6,"bytes":3491,"json":{"request_id":"yhr8m10xxq","type":"control_request","request":{"subtype":"initialize","systemPrompt":["You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]"],"systemPromptSnapshot":false}}},
+    {"t":7,"bytes":128,"json":{"type":"user","session_id":"","message":{"role":"user","content":[{"type":"text","text":"say hi"}]},"parent_tool_use_id":null}}
+   ],
+   "stub_timeline": [
+    {"t":7,"ev":"stdout","type":"control_response","subtype":"success"},
+    {"t":8,"ev":"user-message-read"},
+    {"t":8,"ev":"stdout","type":"system","subtype":"session_state_changed"},
+    {"t":8,"ev":"stdout","type":"system","subtype":"init"},
+    {"t":9,"ev":"stdout","type":"stream_event","subtype":"message_start"},
+    {"t":9,"ev":"stdout","type":"stream_event","subtype":"content_block_start"},
+    {"t":10,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":539,"ev":"stdin-closed"},
+    {"t":540,"ev":"exit","code":0}
+   ],
+   "abort_at_ms": 613,
+   "harness_notes": [
+    {"t":623,"event":"sdk stream finished"}
+   ],
+   "sdk_messages_seen_by_tarsee": [
+    "83:system/init",
+    "84:stream_event/message_start",
+    "84:stream_event/content_block_start",
+    "85:stream_event/content_block_delta"
+   ],
+   "sdk_error_thrown": {
+    "t": 623,
+    "name": "Error",
+    "message": "Operation aborted"
+   },
+   "tarsee_events": [
+    {"t":84,"type":"step","kind":"usage"},
+    {"t":85,"type":"text","content":"partial"},
+    {"t":623,"type":"done","stopReason":"aborted"}
+   ],
+   "tarsee_logs": [
+    {"t":1,"level":"log","text":"[claude-code] Starting claude turn in <SCRATCH>\\ws, model: claude-sonnet-5-5, session: new, media: 0"},
+    {"t":83,"level":"log","text":"[claude-code] claude: apiKeySource=none"},
+    {"t":623,"level":"log","text":"[claude-code] Turn stopped."}
+   ],
+   "run_returned_at_ms": 623
+  },
+  "n-signal-aborted-before-start": {
+   "what": "The caller's signal is already aborted when run() is called: the SDK still starts the program, writes nothing, closes stdin; run() emits done{aborted}.",
+   "stub_scenario": "turn",
+   "sdk_query": {
+    "prompt": "say hi",
+    "options": {"cwd":"<SCRATCH>\\ws","model":"claude-sonnet-5-5","tools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"allowedTools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"permissionMode":"bypassPermissions","allowDangerouslySkipPermissions":true,"maxTurns":50,"includePartialMessages":true,"settingSources":["user","project","local"],"strictMcpConfig":false,"additionalDirectories":["<TARSEE_ROOT>\\src\\skills"],"systemPrompt":{"type":"custom","prompt":"You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]","snapshot":false},"abortController":"<AbortController aborted=true>","fallbackModel":"claude-haiku-5-5","stderr":"<function>"}
+   },
+   "argv": [
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--max-turns=50",
+    "--model=claude-sonnet-5-5",
+    "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--setting-sources=user,project,local",
+    "--permission-mode=bypassPermissions",
+    "--allow-dangerously-skip-permissions",
+    "--fallback-model=claude-haiku-5-5",
+    "--include-partial-messages",
+    "--add-dir=<TARSEE_ROOT>\\src\\skills"
+   ],
+   "env": {
+    "given_to_sdk": {"BASH_MAX_OUTPUT_LENGTH":"8000","CLAUDE_CODE_AUTO_COMPACT_WINDOW":"180000","CLAUDE_CODE_OAUTH_TOKEN":"<PLAN_OAUTH_TOKEN>","DEBUG":"canary","MAX_MCP_OUTPUT_TOKENS":"3000","MY_VAULT_KEY":"vault-value","NODE_OPTIONS":"--max-old-space-size=2048","VERIFY_PLAIN":"kept"},
+    "added_by_sdk": {"CLAUDE_AGENT_SDK_VERSION":"0.3.319","CLAUDE_CODE_ENTRYPOINT":"sdk-ts","CLAUDE_CODE_SDK_READS_SESSION_STATE":"1"},
+    "removed_by_sdk": ["DEBUG","NODE_OPTIONS"],
+    "changed_by_sdk": [],
+    "filled_in_by_windows_process_start": ["HOMEDRIVE","HOMEPATH","LOGONSERVER","USERDOMAIN","USERNAME"]
+   },
+   "stdin": [],
+   "stub_timeline": [
+    {"t":5,"ev":"stdin-closed"},
+    {"t":6,"ev":"exit","code":0}
+   ],
+   "abort_at_ms": null,
+   "harness_notes": [],
+   "sdk_messages_seen_by_tarsee": [],
+   "sdk_error_thrown": null,
+   "tarsee_events": [
+    {"t":5,"type":"done","stopReason":"aborted"}
+   ],
+   "tarsee_logs": [
+    {"t":1,"level":"log","text":"[claude-code] Starting claude turn in <SCRATCH>\\ws, model: claude-sonnet-5-5, session: new, media: 0"},
+    {"t":5,"level":"log","text":"[claude-code] Turn stopped."}
+   ],
+   "run_returned_at_ms": 5
+  },
+  "o-exit1-at-once": {
+   "what": "The program exits with code 1 and a line on stderr (with a key-shaped string in it) before reading anything.",
+   "stub_scenario": "exit1-at-once",
+   "sdk_query": {
+    "prompt": "say hi",
+    "options": {"cwd":"<SCRATCH>\\ws","model":"claude-sonnet-5-5","tools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"allowedTools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"permissionMode":"bypassPermissions","allowDangerouslySkipPermissions":true,"maxTurns":50,"includePartialMessages":true,"settingSources":["user","project","local"],"strictMcpConfig":false,"additionalDirectories":["<TARSEE_ROOT>\\src\\skills"],"systemPrompt":{"type":"custom","prompt":"You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]","snapshot":false},"abortController":"<AbortController aborted=false>","fallbackModel":"claude-haiku-5-5","stderr":"<function>","onProcessSpawned":"<function>"}
+   },
+   "argv": [
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--max-turns=50",
+    "--model=claude-sonnet-5-5",
+    "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--setting-sources=user,project,local",
+    "--permission-mode=bypassPermissions",
+    "--allow-dangerously-skip-permissions",
+    "--fallback-model=claude-haiku-5-5",
+    "--include-partial-messages",
+    "--add-dir=<TARSEE_ROOT>\\src\\skills"
+   ],
+   "env": {
+    "given_to_sdk": {"BASH_MAX_OUTPUT_LENGTH":"8000","CLAUDE_CODE_AUTO_COMPACT_WINDOW":"180000","CLAUDE_CODE_OAUTH_TOKEN":"<PLAN_OAUTH_TOKEN>","DEBUG":"canary","MAX_MCP_OUTPUT_TOKENS":"3000","MY_VAULT_KEY":"vault-value","NODE_OPTIONS":"--max-old-space-size=2048","VERIFY_PLAIN":"kept"},
+    "added_by_sdk": {"CLAUDE_AGENT_SDK_VERSION":"0.3.319","CLAUDE_CODE_ENTRYPOINT":"sdk-ts","CLAUDE_CODE_SDK_READS_SESSION_STATE":"1"},
+    "removed_by_sdk": ["DEBUG","NODE_OPTIONS"],
+    "changed_by_sdk": [],
+    "filled_in_by_windows_process_start": ["HOMEDRIVE","HOMEPATH","LOGONSERVER","USERDOMAIN","USERNAME"]
+   },
+   "stdin": [],
+   "stub_timeline": [
+    {"t":3,"ev":"exit","code":1}
+   ],
+   "abort_at_ms": null,
+   "harness_notes": [
+    {"t":70,"event":"process started, pid known"},
+    {"t":143,"event":"process gone (polled every 10 ms)"},
+    {"t":145,"event":"sdk stream finished"}
+   ],
+   "sdk_messages_seen_by_tarsee": [],
+   "sdk_error_thrown": {
+    "t": 145,
+    "name": "Error",
+    "message": "Claude Code process exited with code 1. stderr: stub: fatal problem on stderr <token>"
+   },
+   "tarsee_events": [
+    {"t":147,"type":"error","message":"**Claude ran into a problem:** Claude Code process exited with code 1. stderr: stub: fatal problem on stderr <token>","recoverable":false,"code":"unknown"},
+    {"t":147,"type":"done","stopReason":"error"}
+   ],
+   "tarsee_logs": [
+    {"t":15,"level":"log","text":"[claude-code] Starting claude turn in <SCRATCH>\\ws, model: claude-sonnet-5-5, session: new, media: 0"},
+    {"t":145,"level":"error","text":"[claude-code] Exception: Error: Claude Code process exited with code 1. stderr: stub: fatal problem on stderr <token>"}
+   ],
+   "run_returned_at_ms": 147
+  },
+  "p-exit0-at-once": {
+   "what": "The program exits with code 0 without a word.",
+   "stub_scenario": "exit0-at-once",
+   "sdk_query": {
+    "prompt": "say hi",
+    "options": {"cwd":"<SCRATCH>\\ws","model":"claude-sonnet-5-5","tools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"allowedTools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"permissionMode":"bypassPermissions","allowDangerouslySkipPermissions":true,"maxTurns":50,"includePartialMessages":true,"settingSources":["user","project","local"],"strictMcpConfig":false,"additionalDirectories":["<TARSEE_ROOT>\\src\\skills"],"systemPrompt":{"type":"custom","prompt":"You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]","snapshot":false},"abortController":"<AbortController aborted=false>","fallbackModel":"claude-haiku-5-5","stderr":"<function>"}
+   },
+   "argv": [
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--max-turns=50",
+    "--model=claude-sonnet-5-5",
+    "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--setting-sources=user,project,local",
+    "--permission-mode=bypassPermissions",
+    "--allow-dangerously-skip-permissions",
+    "--fallback-model=claude-haiku-5-5",
+    "--include-partial-messages",
+    "--add-dir=<TARSEE_ROOT>\\src\\skills"
+   ],
+   "env": {
+    "given_to_sdk": {"BASH_MAX_OUTPUT_LENGTH":"8000","CLAUDE_CODE_AUTO_COMPACT_WINDOW":"180000","CLAUDE_CODE_OAUTH_TOKEN":"<PLAN_OAUTH_TOKEN>","DEBUG":"canary","MAX_MCP_OUTPUT_TOKENS":"3000","MY_VAULT_KEY":"vault-value","NODE_OPTIONS":"--max-old-space-size=2048","VERIFY_PLAIN":"kept"},
+    "added_by_sdk": {"CLAUDE_AGENT_SDK_VERSION":"0.3.319","CLAUDE_CODE_ENTRYPOINT":"sdk-ts","CLAUDE_CODE_SDK_READS_SESSION_STATE":"1"},
+    "removed_by_sdk": ["DEBUG","NODE_OPTIONS"],
+    "changed_by_sdk": [],
+    "filled_in_by_windows_process_start": ["HOMEDRIVE","HOMEPATH","LOGONSERVER","USERDOMAIN","USERNAME"]
+   },
+   "stdin": [],
+   "stub_timeline": [
+    {"t":4,"ev":"exit","code":0}
+   ],
+   "abort_at_ms": null,
+   "harness_notes": [
+    {"t":82,"event":"sdk stream finished"}
+   ],
+   "sdk_messages_seen_by_tarsee": [],
+   "sdk_error_thrown": null,
+   "tarsee_events": [
+    {"t":82,"type":"error","message":"**Claude ran into a problem:** Claude Code returned no response.","recoverable":false,"code":"unknown"},
+    {"t":82,"type":"done","stopReason":"error"}
+   ],
+   "tarsee_logs": [
+    {"t":0,"level":"log","text":"[claude-code] Starting claude turn in <SCRATCH>\\ws, model: claude-sonnet-5-5, session: new, media: 0"}
+   ],
+   "run_returned_at_ms": 82
+  },
+  "q-exit0-after-init-answer": {
+   "what": "The program answers initialize and exits with code 0.",
+   "stub_scenario": "exit0-after-init-answer",
+   "sdk_query": {
+    "prompt": "say hi",
+    "options": {"cwd":"<SCRATCH>\\ws","model":"claude-sonnet-5-5","tools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"allowedTools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"permissionMode":"bypassPermissions","allowDangerouslySkipPermissions":true,"maxTurns":50,"includePartialMessages":true,"settingSources":["user","project","local"],"strictMcpConfig":false,"additionalDirectories":["<TARSEE_ROOT>\\src\\skills"],"systemPrompt":{"type":"custom","prompt":"You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]","snapshot":false},"abortController":"<AbortController aborted=false>","fallbackModel":"claude-haiku-5-5","stderr":"<function>"}
+   },
+   "argv": [
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--max-turns=50",
+    "--model=claude-sonnet-5-5",
+    "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--setting-sources=user,project,local",
+    "--permission-mode=bypassPermissions",
+    "--allow-dangerously-skip-permissions",
+    "--fallback-model=claude-haiku-5-5",
+    "--include-partial-messages",
+    "--add-dir=<TARSEE_ROOT>\\src\\skills"
+   ],
+   "env": {
+    "given_to_sdk": {"BASH_MAX_OUTPUT_LENGTH":"8000","CLAUDE_CODE_AUTO_COMPACT_WINDOW":"180000","CLAUDE_CODE_OAUTH_TOKEN":"<PLAN_OAUTH_TOKEN>","DEBUG":"canary","MAX_MCP_OUTPUT_TOKENS":"3000","MY_VAULT_KEY":"vault-value","NODE_OPTIONS":"--max-old-space-size=2048","VERIFY_PLAIN":"kept"},
+    "added_by_sdk": {"CLAUDE_AGENT_SDK_VERSION":"0.3.319","CLAUDE_CODE_ENTRYPOINT":"sdk-ts","CLAUDE_CODE_SDK_READS_SESSION_STATE":"1"},
+    "removed_by_sdk": ["DEBUG","NODE_OPTIONS"],
+    "changed_by_sdk": [],
+    "filled_in_by_windows_process_start": ["HOMEDRIVE","HOMEPATH","LOGONSERVER","USERDOMAIN","USERNAME"]
+   },
+   "stdin": [
+    {"t":8,"bytes":3492,"json":{"request_id":"3s3gdqc8jto","type":"control_request","request":{"subtype":"initialize","systemPrompt":["You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]"],"systemPromptSnapshot":false}}},
+    {"t":10,"bytes":128,"json":{"type":"user","session_id":"","message":{"role":"user","content":[{"type":"text","text":"say hi"}]},"parent_tool_use_id":null}}
+   ],
+   "stub_timeline": [
+    {"t":9,"ev":"stdout","type":"control_response","subtype":"success"},
+    {"t":10,"ev":"user-message-read"}
+   ],
+   "abort_at_ms": null,
+   "harness_notes": [
+    {"t":150,"event":"sdk stream finished"}
+   ],
+   "sdk_messages_seen_by_tarsee": [],
+   "sdk_error_thrown": null,
+   "tarsee_events": [
+    {"t":150,"type":"error","message":"**Claude ran into a problem:** Claude Code returned no response.","recoverable":false,"code":"unknown"},
+    {"t":150,"type":"done","stopReason":"error"}
+   ],
+   "tarsee_logs": [
+    {"t":1,"level":"log","text":"[claude-code] Starting claude turn in <SCRATCH>\\ws, model: claude-sonnet-5-5, session: new, media: 0"}
+   ],
+   "run_returned_at_ms": 150
+  },
+  "r-exit0-mid-answer": {
+   "what": "The program exits with code 0 in the middle of an answer.",
+   "stub_scenario": "exit0-mid-answer",
+   "sdk_query": {
+    "prompt": "say hi",
+    "options": {"cwd":"<SCRATCH>\\ws","model":"claude-sonnet-5-5","tools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"allowedTools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"permissionMode":"bypassPermissions","allowDangerouslySkipPermissions":true,"maxTurns":50,"includePartialMessages":true,"settingSources":["user","project","local"],"strictMcpConfig":false,"additionalDirectories":["<TARSEE_ROOT>\\src\\skills"],"systemPrompt":{"type":"custom","prompt":"You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]","snapshot":false},"abortController":"<AbortController aborted=false>","fallbackModel":"claude-haiku-5-5","stderr":"<function>"}
+   },
+   "argv": [
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--max-turns=50",
+    "--model=claude-sonnet-5-5",
+    "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--setting-sources=user,project,local",
+    "--permission-mode=bypassPermissions",
+    "--allow-dangerously-skip-permissions",
+    "--fallback-model=claude-haiku-5-5",
+    "--include-partial-messages",
+    "--add-dir=<TARSEE_ROOT>\\src\\skills"
+   ],
+   "env": {
+    "given_to_sdk": {"BASH_MAX_OUTPUT_LENGTH":"8000","CLAUDE_CODE_AUTO_COMPACT_WINDOW":"180000","CLAUDE_CODE_OAUTH_TOKEN":"<PLAN_OAUTH_TOKEN>","DEBUG":"canary","MAX_MCP_OUTPUT_TOKENS":"3000","MY_VAULT_KEY":"vault-value","NODE_OPTIONS":"--max-old-space-size=2048","VERIFY_PLAIN":"kept"},
+    "added_by_sdk": {"CLAUDE_AGENT_SDK_VERSION":"0.3.319","CLAUDE_CODE_ENTRYPOINT":"sdk-ts","CLAUDE_CODE_SDK_READS_SESSION_STATE":"1"},
+    "removed_by_sdk": ["DEBUG","NODE_OPTIONS"],
+    "changed_by_sdk": [],
+    "filled_in_by_windows_process_start": ["HOMEDRIVE","HOMEPATH","LOGONSERVER","USERDOMAIN","USERNAME"]
+   },
+   "stdin": [
+    {"t":6,"bytes":3491,"json":{"request_id":"peqdxcsxlp","type":"control_request","request":{"subtype":"initialize","systemPrompt":["You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]"],"systemPromptSnapshot":false}}},
+    {"t":7,"bytes":128,"json":{"type":"user","session_id":"","message":{"role":"user","content":[{"type":"text","text":"say hi"}]},"parent_tool_use_id":null}}
+   ],
+   "stub_timeline": [
+    {"t":7,"ev":"stdout","type":"control_response","subtype":"success"},
+    {"t":8,"ev":"user-message-read"},
+    {"t":8,"ev":"stdout","type":"system","subtype":"session_state_changed"},
+    {"t":9,"ev":"stdout","type":"system","subtype":"init"},
+    {"t":9,"ev":"stdout","type":"stream_event","subtype":"message_start"},
+    {"t":10,"ev":"stdout","type":"stream_event","subtype":"content_block_start"},
+    {"t":10,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"}
+   ],
+   "abort_at_ms": null,
+   "harness_notes": [
+    {"t":162,"event":"sdk stream finished"}
+   ],
+   "sdk_messages_seen_by_tarsee": [
+    "95:system/init",
+    "95:stream_event/message_start",
+    "96:stream_event/content_block_start",
+    "96:stream_event/content_block_delta"
+   ],
+   "sdk_error_thrown": null,
+   "tarsee_events": [
+    {"t":95,"type":"step","kind":"usage"},
+    {"t":96,"type":"text","content":"partial"},
+    {"t":162,"type":"error","message":"**Claude ran into a problem:** Claude Code stopped without finishing its answer.","recoverable":false,"code":"unknown"},
+    {"t":162,"type":"done","stopReason":"error"}
+   ],
+   "tarsee_logs": [
+    {"t":1,"level":"log","text":"[claude-code] Starting claude turn in <SCRATCH>\\ws, model: claude-sonnet-5-5, session: new, media: 0"},
+    {"t":95,"level":"log","text":"[claude-code] claude: apiKeySource=none"}
+   ],
+   "run_returned_at_ms": 162
+  },
+  "s-program-not-found": {
+   "what": "No program at the path.",
+   "stub_scenario": "turn",
+   "sdk_query": {
+    "prompt": "say hi",
+    "options": {"cwd":"<SCRATCH>\\ws","model":"claude-sonnet-5-5","tools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"allowedTools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"permissionMode":"bypassPermissions","allowDangerouslySkipPermissions":true,"maxTurns":50,"includePartialMessages":true,"settingSources":["user","project","local"],"strictMcpConfig":false,"additionalDirectories":["<TARSEE_ROOT>\\src\\skills"],"systemPrompt":{"type":"custom","prompt":"You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]","snapshot":false},"abortController":"<AbortController aborted=false>","fallbackModel":"claude-haiku-5-5","stderr":"<function>"}
+   },
+   "argv": null,
+   "env": null,
+   "stdin": [],
+   "stub_timeline": [],
+   "abort_at_ms": null,
+   "harness_notes": [
+    {"t":7,"event":"sdk stream finished"}
+   ],
+   "sdk_messages_seen_by_tarsee": [],
+   "sdk_error_thrown": {
+    "t": 7,
+    "name": "ReferenceError",
+    "message": "Claude Code native binary not found at <SCRATCH>\\stub\\no-such-program.exe. Please ensure Claude Code is installed via native installer or specify a valid path with options.pathToClaudeCodeExecutable."
+   },
+   "tarsee_events": [
+    {"t":7,"type":"error","message":"**Claude ran into a problem:** Claude Code native binary not found at <SCRATCH>\\stub\\no-such-program.exe. Please ensure Claude Code is installed via native installer or specify a valid path with options.pathToClaudeCodeExecutable.","recoverable":false,"code":"unknown"},
+    {"t":7,"type":"done","stopReason":"error"}
+   ],
+   "tarsee_logs": [
+    {"t":1,"level":"log","text":"[claude-code] Starting claude turn in <SCRATCH>\\ws, model: claude-sonnet-5-5, session: new, media: 0"},
+    {"t":7,"level":"error","text":"[claude-code] Exception: ReferenceError: Claude Code native  … aller or specify a valid path with options.pathToClaudeCodeExecutable. [269 characters]"}
+   ],
+   "run_returned_at_ms": 7
+  },
+  "t-error-result-then-exit1": {
+   "what": "A result with subtype error_during_execution and two errors, then exit code 1.",
+   "stub_scenario": "error-result",
+   "sdk_query": {
+    "prompt": "say hi",
+    "options": {"cwd":"<SCRATCH>\\ws","model":"claude-sonnet-5-5","tools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"allowedTools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"permissionMode":"bypassPermissions","allowDangerouslySkipPermissions":true,"maxTurns":50,"includePartialMessages":true,"settingSources":["user","project","local"],"strictMcpConfig":false,"additionalDirectories":["<TARSEE_ROOT>\\src\\skills"],"systemPrompt":{"type":"custom","prompt":"You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]","snapshot":false},"abortController":"<AbortController aborted=false>","fallbackModel":"claude-haiku-5-5","stderr":"<function>"}
+   },
+   "argv": [
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--max-turns=50",
+    "--model=claude-sonnet-5-5",
+    "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--setting-sources=user,project,local",
+    "--permission-mode=bypassPermissions",
+    "--allow-dangerously-skip-permissions",
+    "--fallback-model=claude-haiku-5-5",
+    "--include-partial-messages",
+    "--add-dir=<TARSEE_ROOT>\\src\\skills"
+   ],
+   "env": {
+    "given_to_sdk": {"BASH_MAX_OUTPUT_LENGTH":"8000","CLAUDE_CODE_AUTO_COMPACT_WINDOW":"180000","CLAUDE_CODE_OAUTH_TOKEN":"<PLAN_OAUTH_TOKEN>","DEBUG":"canary","MAX_MCP_OUTPUT_TOKENS":"3000","MY_VAULT_KEY":"vault-value","NODE_OPTIONS":"--max-old-space-size=2048","VERIFY_PLAIN":"kept"},
+    "added_by_sdk": {"CLAUDE_AGENT_SDK_VERSION":"0.3.319","CLAUDE_CODE_ENTRYPOINT":"sdk-ts","CLAUDE_CODE_SDK_READS_SESSION_STATE":"1"},
+    "removed_by_sdk": ["DEBUG","NODE_OPTIONS"],
+    "changed_by_sdk": [],
+    "filled_in_by_windows_process_start": ["HOMEDRIVE","HOMEPATH","LOGONSERVER","USERDOMAIN","USERNAME"]
+   },
+   "stdin": [
+    {"t":6,"bytes":3492,"json":{"request_id":"atsuum4tern","type":"control_request","request":{"subtype":"initialize","systemPrompt":["You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]"],"systemPromptSnapshot":false}}},
+    {"t":7,"bytes":128,"json":{"type":"user","session_id":"","message":{"role":"user","content":[{"type":"text","text":"say hi"}]},"parent_tool_use_id":null}}
+   ],
+   "stub_timeline": [
+    {"t":6,"ev":"stdout","type":"control_response","subtype":"success"},
+    {"t":7,"ev":"user-message-read"},
+    {"t":8,"ev":"stdout","type":"system","subtype":"session_state_changed"},
+    {"t":8,"ev":"stdout","type":"system","subtype":"init"},
+    {"t":9,"ev":"stdout","type":"result","subtype":"error_during_execution"},
+    {"t":9,"ev":"stdout","type":"system","subtype":"session_state_changed"},
+    {"t":10,"ev":"stdin-closed"},
+    {"t":13,"ev":"exit","code":1}
+   ],
+   "abort_at_ms": null,
+   "harness_notes": [
+    {"t":121,"event":"sdk stream finished"}
+   ],
+   "sdk_messages_seen_by_tarsee": [
+    "103:system/init",
+    "104:result/error_during_execution"
+   ],
+   "sdk_error_thrown": null,
+   "tarsee_events": [
+    {"t":105,"type":"usage","usage":{"input_tokens":10,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}},
+    {"t":105,"type":"error","message":"Claude Code ended with error_during_execution: first thing went wrong ;  second thing","recoverable":false,"code":"unknown","subtype":"error_during_execution"},
+    {"t":105,"type":"done","stopReason":"error"}
+   ],
+   "tarsee_logs": [
+    {"t":1,"level":"log","text":"[claude-code] Starting claude turn in <SCRATCH>\\ws, model: claude-sonnet-5-5, session: new, media: 0"},
+    {"t":103,"level":"log","text":"[claude-code] claude: apiKeySource=none"}
+   ],
+   "run_returned_at_ms": 121
+  },
+  "u-api-error-result": {
+   "what": "An API failure written as a reply: assistant with error server_error, result success with is_error true, exit code 1.",
+   "stub_scenario": "api-error-result",
+   "sdk_query": {
+    "prompt": "say hi",
+    "options": {"cwd":"<SCRATCH>\\ws","model":"claude-sonnet-5-5","tools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"allowedTools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"permissionMode":"bypassPermissions","allowDangerouslySkipPermissions":true,"maxTurns":50,"includePartialMessages":true,"settingSources":["user","project","local"],"strictMcpConfig":false,"additionalDirectories":["<TARSEE_ROOT>\\src\\skills"],"systemPrompt":{"type":"custom","prompt":"You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]","snapshot":false},"abortController":"<AbortController aborted=false>","fallbackModel":"claude-haiku-5-5","stderr":"<function>"}
+   },
+   "argv": [
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--max-turns=50",
+    "--model=claude-sonnet-5-5",
+    "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--setting-sources=user,project,local",
+    "--permission-mode=bypassPermissions",
+    "--allow-dangerously-skip-permissions",
+    "--fallback-model=claude-haiku-5-5",
+    "--include-partial-messages",
+    "--add-dir=<TARSEE_ROOT>\\src\\skills"
+   ],
+   "env": {
+    "given_to_sdk": {"BASH_MAX_OUTPUT_LENGTH":"8000","CLAUDE_CODE_AUTO_COMPACT_WINDOW":"180000","CLAUDE_CODE_OAUTH_TOKEN":"<PLAN_OAUTH_TOKEN>","DEBUG":"canary","MAX_MCP_OUTPUT_TOKENS":"3000","MY_VAULT_KEY":"vault-value","NODE_OPTIONS":"--max-old-space-size=2048","VERIFY_PLAIN":"kept"},
+    "added_by_sdk": {"CLAUDE_AGENT_SDK_VERSION":"0.3.319","CLAUDE_CODE_ENTRYPOINT":"sdk-ts","CLAUDE_CODE_SDK_READS_SESSION_STATE":"1"},
+    "removed_by_sdk": ["DEBUG","NODE_OPTIONS"],
+    "changed_by_sdk": [],
+    "filled_in_by_windows_process_start": ["HOMEDRIVE","HOMEPATH","LOGONSERVER","USERDOMAIN","USERNAME"]
+   },
+   "stdin": [
+    {"t":5,"bytes":3492,"json":{"request_id":"v2s6sygg1n7","type":"control_request","request":{"subtype":"initialize","systemPrompt":["You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]"],"systemPromptSnapshot":false}}},
+    {"t":7,"bytes":128,"json":{"type":"user","session_id":"","message":{"role":"user","content":[{"type":"text","text":"say hi"}]},"parent_tool_use_id":null}}
+   ],
+   "stub_timeline": [
+    {"t":6,"ev":"stdout","type":"control_response","subtype":"success"},
+    {"t":7,"ev":"user-message-read"},
+    {"t":7,"ev":"stdout","type":"system","subtype":"session_state_changed"},
+    {"t":7,"ev":"stdout","type":"system","subtype":"init"},
+    {"t":8,"ev":"stdout","type":"assistant"},
+    {"t":8,"ev":"stdout","type":"result","subtype":"success"},
+    {"t":8,"ev":"stdout","type":"system","subtype":"session_state_changed"},
+    {"t":9,"ev":"stdin-closed"},
+    {"t":9,"ev":"exit","code":1}
+   ],
+   "abort_at_ms": null,
+   "harness_notes": [
+    {"t":89,"event":"sdk stream finished"}
+   ],
+   "sdk_messages_seen_by_tarsee": [
+    "79:system/init",
+    "80:assistant",
+    "80:result/success"
+   ],
+   "sdk_error_thrown": null,
+   "tarsee_events": [
+    {"t":80,"type":"usage","usage":{"input_tokens":10,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}},
+    {"t":80,"type":"error","message":"**Claude isn't answering right now** (the service is down or overloaded). This usually clears up on its own: try again in a few minutes, or switch to another AI in Settings > AI.","recoverable":false,"code":"unavailable","status":529},
+    {"t":80,"type":"done","stopReason":"error"}
+   ],
+   "tarsee_logs": [
+    {"t":1,"level":"log","text":"[claude-code] Starting claude turn in <SCRATCH>\\ws, model: claude-sonnet-5-5, session: new, media: 0"},
+    {"t":79,"level":"log","text":"[claude-code] claude: apiKeySource=none"},
+    {"t":80,"level":"error","text":"[claude-code] claude: unavailable: API Error: 529 Overloaded."}
+   ],
+   "run_returned_at_ms": 89
+  },
+  "v-budget-forms": {
+   "what": "maxBudgetUsd 0.0000001 and maxTurns 0: --max-budget-usd=1e-7 and no --max-turns at all.",
+   "stub_scenario": "turn",
+   "sdk_query": {
+    "prompt": "say hi",
+    "options": {"cwd":"<SCRATCH>\\ws","model":"claude-sonnet-5-5","tools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"allowedTools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"permissionMode":"bypassPermissions","allowDangerouslySkipPermissions":true,"maxTurns":0,"includePartialMessages":true,"settingSources":["project"],"strictMcpConfig":true,"additionalDirectories":["<TARSEE_ROOT>\\src\\skills"],"systemPrompt":{"type":"custom","prompt":"You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]","snapshot":false},"abortController":"<AbortController aborted=false>","fallbackModel":"claude-haiku-5-5","maxBudgetUsd":1e-7,"stderr":"<function>"}
+   },
+   "argv": [
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--max-budget-usd=1e-7",
+    "--model=claude-sonnet-5-5",
+    "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--setting-sources=project",
+    "--strict-mcp-config",
+    "--permission-mode=bypassPermissions",
+    "--allow-dangerously-skip-permissions",
+    "--fallback-model=claude-haiku-5-5",
+    "--include-partial-messages",
+    "--add-dir=<TARSEE_ROOT>\\src\\skills"
+   ],
+   "env": {
+    "given_to_sdk": {"ANTHROPIC_API_KEY":"<ANTHROPIC_KEY>","BASH_MAX_OUTPUT_LENGTH":"8000","CLAUDE_CODE_AUTO_COMPACT_WINDOW":"180000","CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST":"1","CLAUDE_CONFIG_DIR":"<SCRATCH>\\state\\.claude-home-anthropic","DEBUG":"canary","MAX_MCP_OUTPUT_TOKENS":"3000","MY_VAULT_KEY":"vault-value","NODE_OPTIONS":"--max-old-space-size=2048","VERIFY_PLAIN":"kept"},
+    "added_by_sdk": {"CLAUDE_AGENT_SDK_VERSION":"0.3.319","CLAUDE_CODE_ENTRYPOINT":"sdk-ts","CLAUDE_CODE_SDK_READS_SESSION_STATE":"1"},
+    "removed_by_sdk": ["DEBUG","NODE_OPTIONS"],
+    "changed_by_sdk": [],
+    "filled_in_by_windows_process_start": ["HOMEDRIVE","HOMEPATH","LOGONSERVER","USERDOMAIN","USERNAME"]
+   },
+   "stdin": [
+    {"t":4,"bytes":3492,"json":{"request_id":"7kfdcdj37jv","type":"control_request","request":{"subtype":"initialize","systemPrompt":["You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]"],"systemPromptSnapshot":false}}},
+    {"t":5,"bytes":128,"json":{"type":"user","session_id":"","message":{"role":"user","content":[{"type":"text","text":"say hi"}]},"parent_tool_use_id":null}}
+   ],
+   "stub_timeline": [
+    {"t":5,"ev":"stdout","type":"control_response","subtype":"success"},
+    {"t":6,"ev":"user-message-read"},
+    {"t":6,"ev":"stdout","type":"system","subtype":"session_state_changed"},
+    {"t":6,"ev":"stdout","type":"system","subtype":"init"},
+    {"t":6,"ev":"stdout","type":"stream_event","subtype":"message_start"},
+    {"t":7,"ev":"stdout","type":"stream_event","subtype":"content_block_start"},
+    {"t":7,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":7,"ev":"stdout","type":"assistant"},
+    {"t":7,"ev":"stdout","type":"stream_event","subtype":"content_block_stop"},
+    {"t":7,"ev":"stdout","type":"stream_event","subtype":"message_delta"},
+    {"t":8,"ev":"stdout","type":"stream_event","subtype":"message_stop"},
+    {"t":8,"ev":"stdout","type":"result","subtype":"success"},
+    {"t":8,"ev":"result-written"},
+    {"t":8,"ev":"stdout","type":"system","subtype":"session_state_changed"},
+    {"t":9,"ev":"stdin-closed"},
+    {"t":10,"ev":"exit","code":0}
+   ],
+   "abort_at_ms": null,
+   "harness_notes": [
+    {"t":89,"event":"sdk stream finished"}
+   ],
+   "sdk_messages_seen_by_tarsee": [
+    "77:system/init",
+    "78:stream_event/message_start",
+    "78:stream_event/content_block_start",
+    "78:stream_event/content_block_delta",
+    "78:assistant",
+    "78:stream_event/content_block_stop",
+    "79:stream_event/message_delta",
+    "79:stream_event/message_stop",
+    "79:result/success"
+   ],
+   "sdk_error_thrown": null,
+   "tarsee_events": [
+    {"t":78,"type":"step","kind":"usage"},
+    {"t":78,"type":"text","content":"stub says hi"},
+    {"t":78,"type":"step","kind":"text"},
+    {"t":79,"type":"step","kind":"usage"},
+    {"t":79,"type":"usage","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"context_input_tokens":10},"costUsd":0.0001,"costExact":true},
+    {"t":79,"type":"done","stopReason":"end_turn"}
+   ],
+   "tarsee_logs": [
+    {"t":2,"level":"log","text":"[claude-code] Starting anthropic turn in <SCRATCH>\\ws, model: claude-sonnet-5-5, session: new, media: 0"},
+    {"t":77,"level":"log","text":"[claude-code] anthropic: apiKeySource=ANTHROPIC_API_KEY"}
+   ],
+   "run_returned_at_ms": 89
+  },
+  "w-unknown-control-requests": {
+   "what": "Nine control requests from the program, one of each kind: what the SDK answers with Tarsee's options.",
+   "stub_scenario": "unknown-control",
+   "sdk_query": {
+    "prompt": "say hi",
+    "options": {"cwd":"<SCRATCH>\\ws","model":"claude-sonnet-5-5","tools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"allowedTools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"permissionMode":"bypassPermissions","allowDangerouslySkipPermissions":true,"maxTurns":50,"includePartialMessages":true,"settingSources":["user","project","local"],"strictMcpConfig":false,"additionalDirectories":["<TARSEE_ROOT>\\src\\skills"],"systemPrompt":{"type":"custom","prompt":"You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]","snapshot":false},"abortController":"<AbortController aborted=false>","fallbackModel":"claude-haiku-5-5","stderr":"<function>"}
+   },
+   "argv": [
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--max-turns=50",
+    "--model=claude-sonnet-5-5",
+    "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--setting-sources=user,project,local",
+    "--permission-mode=bypassPermissions",
+    "--allow-dangerously-skip-permissions",
+    "--fallback-model=claude-haiku-5-5",
+    "--include-partial-messages",
+    "--add-dir=<TARSEE_ROOT>\\src\\skills"
+   ],
+   "env": {
+    "given_to_sdk": {"BASH_MAX_OUTPUT_LENGTH":"8000","CLAUDE_CODE_AUTO_COMPACT_WINDOW":"180000","CLAUDE_CODE_OAUTH_TOKEN":"<PLAN_OAUTH_TOKEN>","DEBUG":"canary","MAX_MCP_OUTPUT_TOKENS":"3000","MY_VAULT_KEY":"vault-value","NODE_OPTIONS":"--max-old-space-size=2048","VERIFY_PLAIN":"kept"},
+    "added_by_sdk": {"CLAUDE_AGENT_SDK_VERSION":"0.3.319","CLAUDE_CODE_ENTRYPOINT":"sdk-ts","CLAUDE_CODE_SDK_READS_SESSION_STATE":"1"},
+    "removed_by_sdk": ["DEBUG","NODE_OPTIONS"],
+    "changed_by_sdk": [],
+    "filled_in_by_windows_process_start": ["HOMEDRIVE","HOMEPATH","LOGONSERVER","USERDOMAIN","USERNAME"]
+   },
+   "stdin": [
+    {"t":4,"bytes":3492,"json":{"request_id":"gnsxvhuwlzo","type":"control_request","request":{"subtype":"initialize","systemPrompt":["You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]"],"systemPromptSnapshot":false}}},
+    {"t":5,"bytes":128,"json":{"type":"user","session_id":"","message":{"role":"user","content":[{"type":"text","text":"say hi"}]},"parent_tool_use_id":null}},
+    {"t":9,"bytes":127,"json":{"type":"control_response","response":{"subtype":"error","request_id":"req-0","error":"canUseTool callback is not provided."}}},
+    {"t":9,"bytes":128,"json":{"type":"control_response","response":{"subtype":"error","request_id":"req-1","error":"No hook callback found for ID: hook_9"}}},
+    {"t":10,"bytes":121,"json":{"type":"control_response","response":{"subtype":"error","request_id":"req-2","error":"SDK MCP server not found: nope"}}},
+    {"t":10,"bytes":114,"json":{"type":"control_response","response":{"subtype":"success","request_id":"req-3","response":{"action":"decline"}}}},
+    {"t":10,"bytes":130,"json":{"type":"control_response","response":{"subtype":"error","request_id":"req-6","error":"getOAuthToken callback is not provided."}}},
+    {"t":10,"bytes":133,"json":{"type":"control_response","response":{"subtype":"error","request_id":"req-7","error":"getHostAuthToken callback is not provided."}}},
+    {"t":10,"bytes":140,"json":{"type":"control_response","response":{"subtype":"error","request_id":"req-8","error":"Unsupported control request subtype: made_up_kind"}}}
+   ],
+   "stub_timeline": [
+    {"t":5,"ev":"stdout","type":"control_response","subtype":"success"},
+    {"t":6,"ev":"user-message-read"},
+    {"t":6,"ev":"stdout","type":"system","subtype":"session_state_changed"},
+    {"t":6,"ev":"stdout","type":"system","subtype":"init"},
+    {"t":7,"ev":"stdout","type":"control_request","subtype":"can_use_tool"},
+    {"t":7,"ev":"stdout","type":"control_request","subtype":"hook_callback"},
+    {"t":7,"ev":"stdout","type":"control_request","subtype":"mcp_message"},
+    {"t":7,"ev":"stdout","type":"control_request","subtype":"elicitation"},
+    {"t":8,"ev":"stdout","type":"control_request","subtype":"request_user_dialog"},
+    {"t":8,"ev":"stdout","type":"control_request","subtype":"remote_tool_call"},
+    {"t":8,"ev":"stdout","type":"control_request","subtype":"oauth_token_refresh"},
+    {"t":9,"ev":"stdout","type":"control_request","subtype":"host_auth_token_refresh"},
+    {"t":9,"ev":"stdout","type":"control_request","subtype":"made_up_kind"},
+    {"t":315,"ev":"stdout","type":"stream_event","subtype":"message_start"},
+    {"t":315,"ev":"stdout","type":"stream_event","subtype":"content_block_start"},
+    {"t":316,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":316,"ev":"stdout","type":"assistant"},
+    {"t":316,"ev":"stdout","type":"stream_event","subtype":"content_block_stop"},
+    {"t":316,"ev":"stdout","type":"stream_event","subtype":"message_delta"},
+    {"t":316,"ev":"stdout","type":"stream_event","subtype":"message_stop"},
+    {"t":317,"ev":"stdout","type":"result","subtype":"success"},
+    {"t":317,"ev":"stdout","type":"system","subtype":"session_state_changed"},
+    {"t":317,"ev":"stdin-closed"},
+    {"t":318,"ev":"exit","code":0}
+   ],
+   "abort_at_ms": null,
+   "harness_notes": [
+    {"t":393,"event":"sdk stream finished"}
+   ],
+   "sdk_messages_seen_by_tarsee": [
+    "73:system/init",
+    "382:stream_event/message_start",
+    "382:stream_event/content_block_start",
+    "383:stream_event/content_block_delta",
+    "383:assistant",
+    "383:stream_event/content_block_stop",
+    "383:stream_event/message_delta",
+    "383:stream_event/message_stop",
+    "384:result/success"
+   ],
+   "sdk_error_thrown": null,
+   "tarsee_events": [
+    {"t":382,"type":"step","kind":"usage"},
+    {"t":383,"type":"text","content":"stub says hi"},
+    {"t":383,"type":"step","kind":"text"},
+    {"t":383,"type":"step","kind":"usage"},
+    {"t":384,"type":"usage","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"context_input_tokens":10}},
+    {"t":384,"type":"done","stopReason":"end_turn"}
+   ],
+   "tarsee_logs": [
+    {"t":0,"level":"log","text":"[claude-code] Starting claude turn in <SCRATCH>\\ws, model: claude-sonnet-5-5, session: new, media: 0"},
+    {"t":73,"level":"log","text":"[claude-code] claude: apiKeySource=none"}
+   ],
+   "run_returned_at_ms": 393
+  },
+  "x-non-json-lines": {
+   "what": "A line that is not JSON, blank lines, a keep_alive line ended with CR LF, and a text holding U+2028 and U+2029: the first three are skipped, the text arrives whole.",
+   "stub_scenario": "non-json-lines",
+   "sdk_query": {
+    "prompt": "say hi",
+    "options": {"cwd":"<SCRATCH>\\ws","model":"claude-sonnet-5-5","tools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"allowedTools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"permissionMode":"bypassPermissions","allowDangerouslySkipPermissions":true,"maxTurns":50,"includePartialMessages":true,"settingSources":["user","project","local"],"strictMcpConfig":false,"additionalDirectories":["<TARSEE_ROOT>\\src\\skills"],"systemPrompt":{"type":"custom","prompt":"You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]","snapshot":false},"abortController":"<AbortController aborted=false>","fallbackModel":"claude-haiku-5-5","stderr":"<function>"}
+   },
+   "argv": [
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--max-turns=50",
+    "--model=claude-sonnet-5-5",
+    "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--setting-sources=user,project,local",
+    "--permission-mode=bypassPermissions",
+    "--allow-dangerously-skip-permissions",
+    "--fallback-model=claude-haiku-5-5",
+    "--include-partial-messages",
+    "--add-dir=<TARSEE_ROOT>\\src\\skills"
+   ],
+   "env": {
+    "given_to_sdk": {"BASH_MAX_OUTPUT_LENGTH":"8000","CLAUDE_CODE_AUTO_COMPACT_WINDOW":"180000","CLAUDE_CODE_OAUTH_TOKEN":"<PLAN_OAUTH_TOKEN>","DEBUG":"canary","MAX_MCP_OUTPUT_TOKENS":"3000","MY_VAULT_KEY":"vault-value","NODE_OPTIONS":"--max-old-space-size=2048","VERIFY_PLAIN":"kept"},
+    "added_by_sdk": {"CLAUDE_AGENT_SDK_VERSION":"0.3.319","CLAUDE_CODE_ENTRYPOINT":"sdk-ts","CLAUDE_CODE_SDK_READS_SESSION_STATE":"1"},
+    "removed_by_sdk": ["DEBUG","NODE_OPTIONS"],
+    "changed_by_sdk": [],
+    "filled_in_by_windows_process_start": ["HOMEDRIVE","HOMEPATH","LOGONSERVER","USERDOMAIN","USERNAME"]
+   },
+   "stdin": [
+    {"t":5,"bytes":3492,"json":{"request_id":"k1lsy9h8omc","type":"control_request","request":{"subtype":"initialize","systemPrompt":["You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]"],"systemPromptSnapshot":false}}},
+    {"t":6,"bytes":128,"json":{"type":"user","session_id":"","message":{"role":"user","content":[{"type":"text","text":"say hi"}]},"parent_tool_use_id":null}}
+   ],
+   "stub_timeline": [
+    {"t":6,"ev":"stdout","type":"control_response","subtype":"success"},
+    {"t":6,"ev":"user-message-read"},
+    {"t":7,"ev":"stdout","type":"system","subtype":"session_state_changed"},
+    {"t":7,"ev":"stdout","type":"system","subtype":"init"},
+    {"t":8,"ev":"stdout","type":"stream_event","subtype":"message_start"},
+    {"t":8,"ev":"stdout","type":"stream_event","subtype":"content_block_start"},
+    {"t":8,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":8,"ev":"stdout","type":"assistant"},
+    {"t":9,"ev":"stdout","type":"stream_event","subtype":"content_block_stop"},
+    {"t":9,"ev":"stdout","type":"stream_event","subtype":"message_delta"},
+    {"t":9,"ev":"stdout","type":"stream_event","subtype":"message_stop"},
+    {"t":10,"ev":"stdout","type":"result","subtype":"success"},
+    {"t":10,"ev":"stdout","type":"system","subtype":"session_state_changed"},
+    {"t":11,"ev":"stdin-closed"},
+    {"t":11,"ev":"exit","code":0}
+   ],
+   "abort_at_ms": null,
+   "harness_notes": [
+    {"t":85,"event":"sdk stream finished"}
+   ],
+   "sdk_messages_seen_by_tarsee": [
+    "73:system/init",
+    "74:stream_event/message_start",
+    "74:stream_event/content_block_start",
+    "75:stream_event/content_block_delta",
+    "75:assistant",
+    "75:stream_event/content_block_stop",
+    "75:stream_event/message_delta",
+    "75:stream_event/message_stop",
+    "76:result/success"
+   ],
+   "sdk_error_thrown": null,
+   "tarsee_events": [
+    {"t":74,"type":"step","kind":"usage"},
+    {"t":75,"type":"text","content":"line separators   inside   text"},
+    {"t":75,"type":"step","kind":"text"},
+    {"t":75,"type":"step","kind":"usage"},
+    {"t":76,"type":"usage","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"context_input_tokens":10}},
+    {"t":76,"type":"done","stopReason":"end_turn"}
+   ],
+   "tarsee_logs": [
+    {"t":0,"level":"log","text":"[claude-code] Starting claude turn in <SCRATCH>\\ws, model: claude-sonnet-5-5, session: new, media: 0"},
+    {"t":73,"level":"log","text":"[claude-code] claude: apiKeySource=none"}
+   ],
+   "run_returned_at_ms": 85
+  },
+  "y-bad-key-source": {
+   "what": "system/init reports an apiKeySource the provider does not allow (R6): the error and done at once, run() itself returns 2 s later, the process is ended 7 s later.",
+   "stub_scenario": "bad-key-source",
+   "sdk_query": {
+    "prompt": "say hi",
+    "options": {"cwd":"<SCRATCH>\\ws","model":"claude-sonnet-5-5","tools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"allowedTools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"permissionMode":"bypassPermissions","allowDangerouslySkipPermissions":true,"maxTurns":50,"includePartialMessages":true,"settingSources":["user","project","local"],"strictMcpConfig":false,"additionalDirectories":["<TARSEE_ROOT>\\src\\skills"],"systemPrompt":{"type":"custom","prompt":"You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]","snapshot":false},"abortController":"<AbortController aborted=false>","fallbackModel":"claude-haiku-5-5","stderr":"<function>","onProcessSpawned":"<function>"}
+   },
+   "argv": [
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--max-turns=50",
+    "--model=claude-sonnet-5-5",
+    "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--setting-sources=user,project,local",
+    "--permission-mode=bypassPermissions",
+    "--allow-dangerously-skip-permissions",
+    "--fallback-model=claude-haiku-5-5",
+    "--include-partial-messages",
+    "--add-dir=<TARSEE_ROOT>\\src\\skills"
+   ],
+   "env": {
+    "given_to_sdk": {"BASH_MAX_OUTPUT_LENGTH":"8000","CLAUDE_CODE_AUTO_COMPACT_WINDOW":"180000","CLAUDE_CODE_OAUTH_TOKEN":"<PLAN_OAUTH_TOKEN>","DEBUG":"canary","MAX_MCP_OUTPUT_TOKENS":"3000","MY_VAULT_KEY":"vault-value","NODE_OPTIONS":"--max-old-space-size=2048","VERIFY_PLAIN":"kept"},
+    "added_by_sdk": {"CLAUDE_AGENT_SDK_VERSION":"0.3.319","CLAUDE_CODE_ENTRYPOINT":"sdk-ts","CLAUDE_CODE_SDK_READS_SESSION_STATE":"1"},
+    "removed_by_sdk": ["DEBUG","NODE_OPTIONS"],
+    "changed_by_sdk": [],
+    "filled_in_by_windows_process_start": ["HOMEDRIVE","HOMEPATH","LOGONSERVER","USERDOMAIN","USERNAME"]
+   },
+   "stdin": [
+    {"t":5,"bytes":3492,"json":{"request_id":"59m72f3w8ex","type":"control_request","request":{"subtype":"initialize","systemPrompt":["You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]"],"systemPromptSnapshot":false}}},
+    {"t":6,"bytes":128,"json":{"type":"user","session_id":"","message":{"role":"user","content":[{"type":"text","text":"say hi"}]},"parent_tool_use_id":null}}
+   ],
+   "stub_timeline": [
+    {"t":5,"ev":"stdout","type":"control_response","subtype":"success"},
+    {"t":6,"ev":"user-message-read"},
+    {"t":7,"ev":"stdout","type":"system","subtype":"session_state_changed"},
+    {"t":7,"ev":"stdout","type":"system","subtype":"init"},
+    {"t":9,"ev":"stdin-closed"},
+    {"t":7037,"ev":"exit","code":null,"why":"launcher gone"}
+   ],
+   "abort_at_ms": null,
+   "harness_notes": [
+    {"t":6,"event":"process started, pid known"},
+    {"t":2078,"event":"sdk stream finished"},
+    {"t":7090,"event":"process gone (polled every 10 ms)"}
+   ],
+   "sdk_messages_seen_by_tarsee": [
+    "75:system/init"
+   ],
+   "sdk_error_thrown": null,
+   "tarsee_events": [
+    {"t":77,"type":"error","message":"Tarsee stopped this turn: Claude Code was about to use an Anthropic Console key saved by a Terminal /login in this provider's folder instead of the Claude plan's sign-in. Nothing was sent. Check Settings > AI, and remove any key a Terminal /login saved.","recoverable":false,"code":"credential-isolation"},
+    {"t":77,"type":"done","stopReason":"error"}
+   ],
+   "tarsee_logs": [
+    {"t":1,"level":"log","text":"[claude-code] Starting claude turn in <SCRATCH>\\ws, model: claude-sonnet-5-5, session: new, media: 0"},
+    {"t":75,"level":"log","text":"[claude-code] claude: apiKeySource=/login managed key"},
+    {"t":76,"level":"error","text":"[claude-code] claude: stopped, apiKeySource /login managed key is not this provider's credential"}
+   ],
+   "run_returned_at_ms": 2078
+  },
+  "z-empty-prompt-stable-only": {
+   "what": "No words and no media (the word hello); systemParts with nothing volatile (one string); sessionId null beats a stored handle.",
+   "stub_scenario": "turn",
+   "sdk_query": {
+    "prompt": "hello",
+    "options": {"cwd":"<SCRATCH>\\ws","model":"claude-sonnet-5-5","tools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"allowedTools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"permissionMode":"bypassPermissions","allowDangerouslySkipPermissions":true,"maxTurns":50,"includePartialMessages":true,"settingSources":["user","project","local"],"strictMcpConfig":false,"additionalDirectories":["<TARSEE_ROOT>\\src\\skills"],"systemPrompt":{"type":"custom","prompt":"You ARE Tarsee — a headless AI agent running 24/7 on a serve … f they want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nONLY STABLE [3244 characters]","snapshot":false},"abortController":"<AbortController aborted=false>","fallbackModel":"claude-haiku-5-5","stderr":"<function>"}
+   },
+   "argv": [
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--max-turns=50",
+    "--model=claude-sonnet-5-5",
+    "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--setting-sources=user,project,local",
+    "--permission-mode=bypassPermissions",
+    "--allow-dangerously-skip-permissions",
+    "--fallback-model=claude-haiku-5-5",
+    "--include-partial-messages",
+    "--add-dir=<TARSEE_ROOT>\\src\\skills"
+   ],
+   "env": {
+    "given_to_sdk": {"BASH_MAX_OUTPUT_LENGTH":"8000","CLAUDE_CODE_AUTO_COMPACT_WINDOW":"180000","CLAUDE_CODE_OAUTH_TOKEN":"<PLAN_OAUTH_TOKEN>","DEBUG":"canary","MAX_MCP_OUTPUT_TOKENS":"3000","MY_VAULT_KEY":"vault-value","NODE_OPTIONS":"--max-old-space-size=2048","VERIFY_PLAIN":"kept"},
+    "added_by_sdk": {"CLAUDE_AGENT_SDK_VERSION":"0.3.319","CLAUDE_CODE_ENTRYPOINT":"sdk-ts","CLAUDE_CODE_SDK_READS_SESSION_STATE":"1"},
+    "removed_by_sdk": ["DEBUG","NODE_OPTIONS"],
+    "changed_by_sdk": [],
+    "filled_in_by_windows_process_start": ["HOMEDRIVE","HOMEPATH","LOGONSERVER","USERDOMAIN","USERNAME"]
+   },
+   "stdin": [
+    {"t":4,"bytes":3484,"json":{"request_id":"niff3wuwkc","type":"control_request","request":{"subtype":"initialize","systemPrompt":["You ARE Tarsee — a headless AI agent running 24/7 on a serve … f they want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nONLY STABLE [3244 characters]"],"systemPromptSnapshot":false}}},
+    {"t":5,"bytes":127,"json":{"type":"user","session_id":"","message":{"role":"user","content":[{"type":"text","text":"hello"}]},"parent_tool_use_id":null}}
+   ],
+   "stub_timeline": [
+    {"t":5,"ev":"stdout","type":"control_response","subtype":"success"},
+    {"t":6,"ev":"user-message-read"},
+    {"t":6,"ev":"stdout","type":"system","subtype":"session_state_changed"},
+    {"t":6,"ev":"stdout","type":"system","subtype":"init"},
+    {"t":7,"ev":"stdout","type":"stream_event","subtype":"message_start"},
+    {"t":7,"ev":"stdout","type":"stream_event","subtype":"content_block_start"},
+    {"t":7,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":8,"ev":"stdout","type":"assistant"},
+    {"t":8,"ev":"stdout","type":"stream_event","subtype":"content_block_stop"},
+    {"t":8,"ev":"stdout","type":"stream_event","subtype":"message_delta"},
+    {"t":8,"ev":"stdout","type":"stream_event","subtype":"message_stop"},
+    {"t":9,"ev":"stdout","type":"result","subtype":"success"},
+    {"t":9,"ev":"result-written"},
+    {"t":9,"ev":"stdout","type":"system","subtype":"session_state_changed"},
+    {"t":10,"ev":"stdin-closed"},
+    {"t":10,"ev":"exit","code":0}
+   ],
+   "abort_at_ms": null,
+   "harness_notes": [
+    {"t":78,"event":"sdk stream finished"}
+   ],
+   "sdk_messages_seen_by_tarsee": [
+    "67:system/init",
+    "68:stream_event/message_start",
+    "68:stream_event/content_block_start",
+    "68:stream_event/content_block_delta",
+    "69:assistant",
+    "69:stream_event/content_block_stop",
+    "69:stream_event/message_delta",
+    "69:stream_event/message_stop",
+    "70:result/success"
+   ],
+   "sdk_error_thrown": null,
+   "tarsee_events": [
+    {"t":68,"type":"step","kind":"usage"},
+    {"t":68,"type":"text","content":"stub says hi"},
+    {"t":69,"type":"step","kind":"text"},
+    {"t":69,"type":"step","kind":"usage"},
+    {"t":70,"type":"usage","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"context_input_tokens":10}},
+    {"t":70,"type":"done","stopReason":"end_turn"}
+   ],
+   "tarsee_logs": [
+    {"t":1,"level":"log","text":"[claude-code] Starting claude turn in <SCRATCH>\\ws, model: claude-sonnet-5-5, session: new, media: 0"},
+    {"t":67,"level":"log","text":"[claude-code] claude: apiKeySource=none"}
+   ],
+   "run_returned_at_ms": 78
+  },
+  "za-exit3-no-stderr": {
+   "what": "The program exits with code 3 and nothing on stderr.",
+   "stub_scenario": "exit3-no-stderr",
+   "sdk_query": {
+    "prompt": "say hi",
+    "options": {"cwd":"<SCRATCH>\\ws","model":"claude-sonnet-5-5","tools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"allowedTools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"permissionMode":"bypassPermissions","allowDangerouslySkipPermissions":true,"maxTurns":50,"includePartialMessages":true,"settingSources":["user","project","local"],"strictMcpConfig":false,"additionalDirectories":["<TARSEE_ROOT>\\src\\skills"],"systemPrompt":{"type":"custom","prompt":"You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]","snapshot":false},"abortController":"<AbortController aborted=false>","fallbackModel":"claude-haiku-5-5","stderr":"<function>"}
+   },
+   "argv": [
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--max-turns=50",
+    "--model=claude-sonnet-5-5",
+    "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--setting-sources=user,project,local",
+    "--permission-mode=bypassPermissions",
+    "--allow-dangerously-skip-permissions",
+    "--fallback-model=claude-haiku-5-5",
+    "--include-partial-messages",
+    "--add-dir=<TARSEE_ROOT>\\src\\skills"
+   ],
+   "env": {
+    "given_to_sdk": {"BASH_MAX_OUTPUT_LENGTH":"8000","CLAUDE_CODE_AUTO_COMPACT_WINDOW":"180000","CLAUDE_CODE_OAUTH_TOKEN":"<PLAN_OAUTH_TOKEN>","DEBUG":"canary","MAX_MCP_OUTPUT_TOKENS":"3000","MY_VAULT_KEY":"vault-value","NODE_OPTIONS":"--max-old-space-size=2048","VERIFY_PLAIN":"kept"},
+    "added_by_sdk": {"CLAUDE_AGENT_SDK_VERSION":"0.3.319","CLAUDE_CODE_ENTRYPOINT":"sdk-ts","CLAUDE_CODE_SDK_READS_SESSION_STATE":"1"},
+    "removed_by_sdk": ["DEBUG","NODE_OPTIONS"],
+    "changed_by_sdk": [],
+    "filled_in_by_windows_process_start": ["HOMEDRIVE","HOMEPATH","LOGONSERVER","USERDOMAIN","USERNAME"]
+   },
+   "stdin": [],
+   "stub_timeline": [
+    {"t":3,"ev":"exit","code":3}
+   ],
+   "abort_at_ms": null,
+   "harness_notes": [
+    {"t":74,"event":"sdk stream finished"}
+   ],
+   "sdk_messages_seen_by_tarsee": [],
+   "sdk_error_thrown": {
+    "t": 74,
+    "name": "Error",
+    "message": "Claude Code process exited with code 3"
+   },
+   "tarsee_events": [
+    {"t":74,"type":"error","message":"**Claude ran into a problem:** Claude Code process exited with code 3","recoverable":false,"code":"unknown"},
+    {"t":74,"type":"done","stopReason":"error"}
+   ],
+   "tarsee_logs": [
+    {"t":1,"level":"log","text":"[claude-code] Starting claude turn in <SCRATCH>\\ws, model: claude-sonnet-5-5, session: new, media: 0"},
+    {"t":74,"level":"error","text":"[claude-code] Exception: Error: Claude Code process exited with code 3"}
+   ],
+   "run_returned_at_ms": 74
+  },
+  "zb-no-init-answer": {
+   "what": "The program never answers initialize: the turn runs all the same.",
+   "stub_scenario": "no-init-answer",
+   "sdk_query": {
+    "prompt": "say hi",
+    "options": {"cwd":"<SCRATCH>\\ws","model":"claude-sonnet-5-5","tools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"allowedTools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"permissionMode":"bypassPermissions","allowDangerouslySkipPermissions":true,"maxTurns":50,"includePartialMessages":true,"settingSources":["user","project","local"],"strictMcpConfig":false,"additionalDirectories":["<TARSEE_ROOT>\\src\\skills"],"systemPrompt":{"type":"custom","prompt":"You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]","snapshot":false},"abortController":"<AbortController aborted=false>","fallbackModel":"claude-haiku-5-5","stderr":"<function>"}
+   },
+   "argv": [
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--max-turns=50",
+    "--model=claude-sonnet-5-5",
+    "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--setting-sources=user,project,local",
+    "--permission-mode=bypassPermissions",
+    "--allow-dangerously-skip-permissions",
+    "--fallback-model=claude-haiku-5-5",
+    "--include-partial-messages",
+    "--add-dir=<TARSEE_ROOT>\\src\\skills"
+   ],
+   "env": {
+    "given_to_sdk": {"BASH_MAX_OUTPUT_LENGTH":"8000","CLAUDE_CODE_AUTO_COMPACT_WINDOW":"180000","CLAUDE_CODE_OAUTH_TOKEN":"<PLAN_OAUTH_TOKEN>","DEBUG":"canary","MAX_MCP_OUTPUT_TOKENS":"3000","MY_VAULT_KEY":"vault-value","NODE_OPTIONS":"--max-old-space-size=2048","VERIFY_PLAIN":"kept"},
+    "added_by_sdk": {"CLAUDE_AGENT_SDK_VERSION":"0.3.319","CLAUDE_CODE_ENTRYPOINT":"sdk-ts","CLAUDE_CODE_SDK_READS_SESSION_STATE":"1"},
+    "removed_by_sdk": ["DEBUG","NODE_OPTIONS"],
+    "changed_by_sdk": [],
+    "filled_in_by_windows_process_start": ["HOMEDRIVE","HOMEPATH","LOGONSERVER","USERDOMAIN","USERNAME"]
+   },
+   "stdin": [
+    {"t":3,"bytes":3491,"json":{"request_id":"mj9uzgsx4z","type":"control_request","request":{"subtype":"initialize","systemPrompt":["You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]"],"systemPromptSnapshot":false}}},
+    {"t":4,"bytes":128,"json":{"type":"user","session_id":"","message":{"role":"user","content":[{"type":"text","text":"say hi"}]},"parent_tool_use_id":null}}
+   ],
+   "stub_timeline": [
+    {"t":4,"ev":"user-message-read"},
+    {"t":4,"ev":"stdout","type":"system","subtype":"session_state_changed"},
+    {"t":5,"ev":"stdout","type":"system","subtype":"init"},
+    {"t":6,"ev":"stdout","type":"stream_event","subtype":"message_start"},
+    {"t":6,"ev":"stdout","type":"stream_event","subtype":"content_block_start"},
+    {"t":6,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":6,"ev":"stdout","type":"assistant"},
+    {"t":7,"ev":"stdout","type":"stream_event","subtype":"content_block_stop"},
+    {"t":7,"ev":"stdout","type":"stream_event","subtype":"message_delta"},
+    {"t":7,"ev":"stdout","type":"stream_event","subtype":"message_stop"},
+    {"t":8,"ev":"stdout","type":"result","subtype":"success"},
+    {"t":8,"ev":"result-written"},
+    {"t":8,"ev":"stdout","type":"system","subtype":"session_state_changed"},
+    {"t":9,"ev":"stdin-closed"},
+    {"t":9,"ev":"exit","code":0}
+   ],
+   "abort_at_ms": null,
+   "harness_notes": [
+    {"t":80,"event":"sdk stream finished"}
+   ],
+   "sdk_messages_seen_by_tarsee": [
+    "68:system/init",
+    "68:stream_event/message_start",
+    "69:stream_event/content_block_start",
+    "69:stream_event/content_block_delta",
+    "69:assistant",
+    "69:stream_event/content_block_stop",
+    "69:stream_event/message_delta",
+    "70:stream_event/message_stop",
+    "70:result/success"
+   ],
+   "sdk_error_thrown": null,
+   "tarsee_events": [
+    {"t":69,"type":"step","kind":"usage"},
+    {"t":69,"type":"text","content":"stub says hi"},
+    {"t":69,"type":"step","kind":"text"},
+    {"t":69,"type":"step","kind":"usage"},
+    {"t":70,"type":"usage","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"context_input_tokens":10}},
+    {"t":70,"type":"done","stopReason":"end_turn"}
+   ],
+   "tarsee_logs": [
+    {"t":1,"level":"log","text":"[claude-code] Starting claude turn in <SCRATCH>\\ws, model: claude-sonnet-5-5, session: new, media: 0"},
+    {"t":68,"level":"log","text":"[claude-code] claude: apiKeySource=none"}
+   ],
+   "run_returned_at_ms": 80
+  },
+  "zc-working-folder-missing": {
+   "what": "The working folder does not exist: the SDK blames the binary.",
+   "stub_scenario": "turn",
+   "sdk_query": {
+    "prompt": "say hi",
+    "options": {"cwd":"<SCRATCH>\\no-such-folder\\ws","model":"claude-sonnet-5-5","tools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"allowedTools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"permissionMode":"bypassPermissions","allowDangerouslySkipPermissions":true,"maxTurns":50,"includePartialMessages":true,"settingSources":["user","project","local"],"strictMcpConfig":false,"additionalDirectories":["<TARSEE_ROOT>\\src\\skills"],"systemPrompt":{"type":"custom","prompt":"You ARE Tarsee — a headless AI agent running 24/7 on a serve … ate one\n\n## Workspace: <SCRATCH>\\no-such-folder\\ws\n\nSYSTEM PROMPT TEXT [3281 characters]","snapshot":false},"abortController":"<AbortController aborted=false>","fallbackModel":"claude-haiku-5-5","stderr":"<function>","onProcessSpawned":"<function>"}
+   },
+   "argv": null,
+   "env": null,
+   "stdin": [],
+   "stub_timeline": [],
+   "abort_at_ms": null,
+   "harness_notes": [
+    {"t":33,"event":"sdk stream finished"}
+   ],
+   "sdk_messages_seen_by_tarsee": [],
+   "sdk_error_thrown": {
+    "t": 33,
+    "name": "ReferenceError",
+    "message": "Claude Code native binary at <SCRATCH>\\stub\\fake-claude.exe exists but failed to launch. This usually means the binary does not match this system's libc — e.g. spawning a musl-linked binary on a glibc Linux host fails because the musl dynamic loader (/lib/ld-musl-*) is missing. Specify a matching binary with options.pathToClaudeCodeExecutable."
+   },
+   "tarsee_events": [
+    {"t":35,"type":"error","message":"**Claude ran into a problem:** Claude Code native binary at <SCRATCH>\\stub\\fake-claude.exe exists but failed to launch. This usually means the binary does not match this system's libc — e.g. spawning a musl-linked binary on a glibc Linux host fails because the musl dynamic loader (/lib/ld-musl-*) is missing. Specify a matching binary with options.pathToClaudeCodeExecutable.","recoverable":false,"code":"unknown"},
+    {"t":35,"type":"done","stopReason":"error"}
+   ],
+   "tarsee_logs": [
+    {"t":13,"level":"log","text":"[claude-code] Starting claude turn in <SCRATCH>\\no-such-folder\\ws, model: claude-sonnet-5-5, session: new, media: 0"},
+    {"t":33,"level":"error","text":"[claude-code] Exception: ReferenceError: Claude Code native  … ng. Specify a matching binary with options.pathToClaudeCodeExecutable. [415 characters]"}
+   ],
+   "run_returned_at_ms": 36
+  },
+  "zd-crlf-lines": {
+   "what": "A whole turn whose every stdout line ends with CR LF: read as usual.",
+   "stub_scenario": "turn",
+   "sdk_query": {
+    "prompt": "say hi",
+    "options": {"cwd":"<SCRATCH>\\ws","model":"claude-sonnet-5-5","tools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"allowedTools":["Read","Write","Edit","Bash","Glob","Grep","mcp__tarsee__*"],"permissionMode":"bypassPermissions","allowDangerouslySkipPermissions":true,"maxTurns":50,"includePartialMessages":true,"settingSources":["user","project","local"],"strictMcpConfig":false,"additionalDirectories":["<TARSEE_ROOT>\\src\\skills"],"systemPrompt":{"type":"custom","prompt":"You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]","snapshot":false},"abortController":"<AbortController aborted=false>","fallbackModel":"claude-haiku-5-5","stderr":"<function>","onProcessSpawned":"<function>"}
+   },
+   "argv": [
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--max-turns=50",
+    "--model=claude-sonnet-5-5",
+    "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--setting-sources=user,project,local",
+    "--permission-mode=bypassPermissions",
+    "--allow-dangerously-skip-permissions",
+    "--fallback-model=claude-haiku-5-5",
+    "--include-partial-messages",
+    "--add-dir=<TARSEE_ROOT>\\src\\skills"
+   ],
+   "env": {
+    "given_to_sdk": {"BASH_MAX_OUTPUT_LENGTH":"8000","CLAUDE_CODE_AUTO_COMPACT_WINDOW":"180000","CLAUDE_CODE_OAUTH_TOKEN":"<PLAN_OAUTH_TOKEN>","DEBUG":"canary","MAX_MCP_OUTPUT_TOKENS":"3000","MY_VAULT_KEY":"vault-value","NODE_OPTIONS":"--max-old-space-size=2048","VERIFY_PLAIN":"kept","VSTUB_EOL":"crlf"},
+    "added_by_sdk": {"CLAUDE_AGENT_SDK_VERSION":"0.3.319","CLAUDE_CODE_ENTRYPOINT":"sdk-ts","CLAUDE_CODE_SDK_READS_SESSION_STATE":"1"},
+    "removed_by_sdk": ["DEBUG","NODE_OPTIONS"],
+    "changed_by_sdk": [],
+    "filled_in_by_windows_process_start": ["HOMEDRIVE","HOMEPATH","LOGONSERVER","USERDOMAIN","USERNAME"]
+   },
+   "stdin": [
+    {"t":42,"bytes":3493,"json":{"request_id":"03d0h7gs9wot","type":"control_request","request":{"subtype":"initialize","systemPrompt":["You ARE Tarsee — a headless AI agent running 24/7 on a serve … want you to create one\n\n## Workspace: <SCRATCH>\\ws\n\nSYSTEM PROMPT TEXT [3251 characters]"],"systemPromptSnapshot":false}}},
+    {"t":46,"bytes":128,"json":{"type":"user","session_id":"","message":{"role":"user","content":[{"type":"text","text":"say hi"}]},"parent_tool_use_id":null}}
+   ],
+   "stub_timeline": [
+    {"t":43,"ev":"stdout","type":"control_response","subtype":"success"},
+    {"t":46,"ev":"user-message-read"},
+    {"t":46,"ev":"stdout","type":"system","subtype":"session_state_changed"},
+    {"t":47,"ev":"stdout","type":"system","subtype":"init"},
+    {"t":102,"ev":"stdout","type":"stream_event","subtype":"message_start"},
+    {"t":105,"ev":"stdout","type":"stream_event","subtype":"content_block_start"},
+    {"t":106,"ev":"stdout","type":"stream_event","subtype":"content_block_delta"},
+    {"t":106,"ev":"stdout","type":"assistant"},
+    {"t":108,"ev":"stdout","type":"stream_event","subtype":"content_block_stop"},
+    {"t":109,"ev":"stdout","type":"stream_event","subtype":"message_delta"},
+    {"t":112,"ev":"stdout","type":"stream_event","subtype":"message_stop"},
+    {"t":112,"ev":"stdout","type":"result","subtype":"success"},
+    {"t":112,"ev":"result-written"},
+    {"t":113,"ev":"stdout","type":"system","subtype":"session_state_changed"},
+    {"t":236,"ev":"stdin-closed"},
+    {"t":239,"ev":"exit","code":0}
+   ],
+   "abort_at_ms": null,
+   "harness_notes": [
+    {"t":155,"event":"process started, pid known"},
+    {"t":1069,"event":"process gone (polled every 10 ms)"},
+    {"t":1089,"event":"sdk stream finished"}
+   ],
+   "sdk_messages_seen_by_tarsee": [
+    "739:system/init",
+    "795:stream_event/message_start",
+    "797:stream_event/content_block_start",
+    "798:stream_event/content_block_delta",
+    "798:assistant",
+    "801:stream_event/content_block_stop",
+    "802:stream_event/message_delta",
+    "803:stream_event/message_stop",
+    "806:result/success"
+   ],
+   "sdk_error_thrown": null,
+   "tarsee_events": [
+    {"t":795,"type":"step","kind":"usage"},
+    {"t":798,"type":"text","content":"stub says hi"},
+    {"t":799,"type":"step","kind":"text"},
+    {"t":803,"type":"step","kind":"usage"},
+    {"t":806,"type":"usage","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"context_input_tokens":10}},
+    {"t":806,"type":"done","stopReason":"end_turn"}
+   ],
+   "tarsee_logs": [
+    {"t":127,"level":"log","text":"[claude-code] Starting claude turn in <SCRATCH>\\ws, model: claude-sonnet-5-5, session: new, media: 0"},
+    {"t":739,"level":"log","text":"[claude-code] claude: apiKeySource=none"}
+   ],
+   "run_returned_at_ms": 1089
+  }
+ }
+}

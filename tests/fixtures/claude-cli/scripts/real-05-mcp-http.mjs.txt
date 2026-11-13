@@ -1,0 +1,123 @@
+// Real CLI, driven directly: Tarsee's tools as an MCP server reached over HTTP on loopback with a bearer token.
+// A tiny local HTTP server logs every request and answers initialize, tools/list and tools/call; the program is
+// pointed at it with --mcp-config, and the fake Messages API scripts a call to one of its tools.
+import { drive, gatewayEnv, baseArgs, initRequest, userText, startFakeAnthropic, SCRATCH } from "./real-drive.mjs";
+import fs from "node:fs";
+import http from "node:http";
+
+fs.mkdirSync(`${SCRATCH}/real`, { recursive: true });
+const which = (process.argv[2] || "all").split(",");
+const want = (k) => which.includes("all") || which.includes(k);
+const SS = { CLAUDE_CODE_SDK_READS_SESSION_STATE: "1" };
+const TOKEN = "tarsee-mcp-" + "test-token-0123456789abcdef";
+
+const TOOLS = [
+  { name: "tarsee_datetime", description: "Get current date/time/day or convert timezones.", inputSchema: { type: "object", properties: { timezone: { type: "string", description: "IANA timezone" }, format: { type: "string", enum: ["full", "date", "time", "day", "iso"] } }, additionalProperties: false, $schema: "http://json-schema.org/draft-07/schema#" } },
+  { name: "tarsee_calculator", description: "Evaluate a math expression with precision.", inputSchema: { type: "object", properties: { expression: { type: "string" } }, required: ["expression"], additionalProperties: false, $schema: "http://json-schema.org/draft-07/schema#" } },
+];
+
+/** A minimal MCP server over HTTP (JSON responses only, no session id, no SSE stream). */
+async function startMcp({ token = TOKEN, sessionId = null } = {}) {
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    let raw = "";
+    req.on("data", (c) => { raw += c; });
+    req.on("end", () => {
+      let body = null; try { body = raw ? JSON.parse(raw) : null; } catch { body = raw; }
+      const entry = { at: Date.now(), method: req.method, path: req.url, headers: { ...req.headers }, body };
+      requests.push(entry);
+      const auth = req.headers.authorization || "";
+      if (auth !== `Bearer ${token}`) {
+        entry.answered = 401;
+        res.writeHead(401, { "content-type": "application/json", "www-authenticate": "Bearer" });
+        res.end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32001, message: "Unauthorized" }, id: body?.id ?? null }));
+        return;
+      }
+      if (req.method !== "POST") { entry.answered = 405; res.writeHead(405, { allow: "POST" }); res.end(); return; }
+      const reply = (result) => { entry.answered = 200; res.writeHead(200, { "content-type": "application/json", ...(sessionId && body?.method === "initialize" ? { "mcp-session-id": sessionId } : {}) }); res.end(JSON.stringify({ jsonrpc: "2.0", id: body.id, result })); };
+      if (body?.method === "initialize") return reply({ protocolVersion: body.params?.protocolVersion || "2025-06-18", capabilities: { tools: { listChanged: false } }, serverInfo: { name: "tarsee", version: "1.0.0" } });
+      if (body?.method === "tools/list") return reply({ tools: TOOLS });
+      if (body?.method === "tools/call") return reply({ content: [{ type: "text", text: `called ${body.params?.name} with ${JSON.stringify(body.params?.arguments)}: 2026-11-13T00:00:00Z` }] });
+      if (body?.method === "ping") return reply({});
+      if (body && body.id === undefined) { entry.answered = 202; res.writeHead(202); res.end(); return; } // a notification
+      entry.answered = 200;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ jsonrpc: "2.0", id: body?.id ?? null, error: { code: -32601, message: `Method not found: ${body?.method}` } }));
+    });
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  return { url: `http://127.0.0.1:${server.address().port}/mcp`, requests, close: () => { server.closeAllConnections?.(); return new Promise((r) => server.close(() => r())); } };
+}
+
+const hasToolResult = (body) => {
+  const last = [...(body?.messages || [])].reverse().find((m) => m.role === "user");
+  return Array.isArray(last?.content) && last.content.some((b) => b.type === "tool_result");
+};
+const toolNames = (body) => (body?.tools || []).map((x) => x.name);
+
+async function run(label, name, { config, mcpOpts = {}, envExtra = {}, argsExtra = null, callTool = true, mcpDown = false }) {
+  const mcp = await startMcp(mcpOpts);
+  if (mcpDown) await mcp.close();
+  const fake = await startFakeAnthropic({
+    script: (req) => {
+      if (hasToolResult(req.body)) return { text: "The time is noted." };
+      if (callTool && toolNames(req.body).includes("mcp__tarsee__tarsee_datetime")) return { toolUse: { id: "toolu_mcp_1", name: "mcp__tarsee__tarsee_datetime", input: { timezone: "UTC", format: "iso" } } };
+      return { text: "No tarsee tool was offered." };
+    },
+  });
+  try {
+    const cfg = typeof config === "function" ? config(mcp.url) : config;
+    const extra = argsExtra ? argsExtra(mcp.url) : ["--mcp-config", JSON.stringify(cfg)];
+    const args = baseArgs({ extra });
+    const r = await drive({
+      name, args, env: gatewayEnv(`${SCRATCH}/homes/${name}`, fake.url, { ...SS, ...envExtra }), cwd: `${SCRATCH}/ws/${name}`,
+      stdin: [initRequest({ systemPrompt: ["You are a test."], systemPromptSnapshot: false }), userText("what time is it?")], timeoutMs: 90_000,
+    });
+    const msgs = r.stdout.map((o) => o.msg).filter(Boolean);
+    const init = msgs.find((m) => m.type === "system" && m.subtype === "init");
+    console.log(`\n===== ${label}: exit ${r.exitCode}; stderr ${JSON.stringify(r.stderr.slice(0, 500))}`);
+    console.log("  argv tail:", JSON.stringify(args.slice(-3)).replaceAll(TOKEN, "<TOKEN>"));
+    console.log("  init.mcp_servers:", JSON.stringify(init?.mcp_servers));
+    console.log("  init.tools:", JSON.stringify(init?.tools));
+    for (const m of msgs) {
+      if (m.type === "assistant" || m.type === "user") console.log(`  < ${m.type} ${JSON.stringify(m.message.content).slice(0, 500)}`);
+      if (m.type === "result") console.log(`  < result ${m.subtype} is_error=${m.is_error} result=${JSON.stringify(m.result)}`);
+      if (m.type === "control_request") console.log(`  < control_request ${JSON.stringify(m).slice(0, 400)}`);
+      if (m.type === "system" && !["init", "status", "session_state_changed"].includes(m.subtype)) console.log(`  < system/${m.subtype} ${JSON.stringify(m).slice(0, 400)}`);
+    }
+    const api = fake.messages();
+    console.log("  tools offered to the model, per API request:", api.map((q) => JSON.stringify(toolNames(q.body))).join(" ; "));
+    console.log("  MCP server saw:");
+    for (const q of mcp.requests) {
+      console.log(`    ${q.method} ${q.path} -> ${q.answered}  body=${JSON.stringify(q.body)?.slice(0, 600)}`);
+      console.log(`      headers=${JSON.stringify(q.headers).replaceAll(TOKEN, "<TOKEN>")}`);
+    }
+    fs.writeFileSync(`${SCRATCH}/real/${name}.mcp.json`, JSON.stringify({ argv_mcp: extra, requests: mcp.requests }, null, 2).replaceAll(TOKEN, "<TOKEN>"));
+    fs.writeFileSync(`${SCRATCH}/real/${name}.api.json`, JSON.stringify(api, null, 2));
+    return { r, mcp, fake, init };
+  } finally {
+    await fake.close();
+    if (!mcpDown) await mcp.close();
+  }
+}
+
+const cfgOf = (extra = {}) => (url) => ({ mcpServers: { tarsee: { type: "http", url, headers: { Authorization: `Bearer ${TOKEN}` }, ...extra } } });
+
+if (want("basic")) await run("HTTP server with a bearer token in headers (inline JSON after --mcp-config)", "05-mcp-http-basic", { config: cfgOf() });
+if (want("always")) await run("the same with alwaysLoad: true", "05-mcp-http-alwaysload", { config: cfgOf({ alwaysLoad: true }) });
+if (want("session")) await run("the server hands out an Mcp-Session-Id", "05-mcp-http-sessionid", { config: cfgOf({ alwaysLoad: true }), mcpOpts: { sessionId: "sess-test-1" } });
+if (want("envtoken")) await run("the token from the environment: headers {Authorization: 'Bearer ${TARSEE_MCP_TOKEN}'}", "05-mcp-http-envtoken", {
+  config: (url) => ({ mcpServers: { tarsee: { type: "http", url, headers: { Authorization: "Bearer ${TARSEE_MCP_TOKEN}" }, alwaysLoad: true } } }),
+  envExtra: { TARSEE_MCP_TOKEN: TOKEN },
+});
+if (want("file")) await run("--mcp-config given a file path", "05-mcp-http-file", {
+  config: cfgOf({ alwaysLoad: true }),
+  argsExtra: (url) => {
+    const p = `${SCRATCH}/real/mcp-config-file.json`;
+    fs.writeFileSync(p, JSON.stringify(cfgOf({ alwaysLoad: true })(url)));
+    return ["--mcp-config", p.replaceAll("/", "\\")];
+  },
+});
+if (want("eq")) await run("--mcp-config=<json> as one argument", "05-mcp-http-eq", { config: cfgOf({ alwaysLoad: true }), argsExtra: (url) => [`--mcp-config=${JSON.stringify(cfgOf({ alwaysLoad: true })(url))}`] });
+if (want("wrongtoken")) await run("a wrong bearer token (the server answers 401)", "05-mcp-http-wrongtoken", { config: cfgOf({ alwaysLoad: true }), mcpOpts: { token: "another-token" } });
+if (want("down")) await run("nothing listening at the address", "05-mcp-http-down", { config: cfgOf({ alwaysLoad: true }), mcpDown: true });

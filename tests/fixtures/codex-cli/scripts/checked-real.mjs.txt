@@ -1,0 +1,439 @@
+// Independent check of the claims about the real `codex` 0.167.0 program, with no account, no key and no model:
+// a logging MCP server and a scripted stand-in for the Responses API, both on loopback, written for this check.
+// Usage: node real.mjs [scenario ...]
+import fs from "node:fs";
+import path from "node:path";
+import http from "node:http";
+import { spawn } from "node:child_process";
+
+const SCRATCH = path.resolve(process.env.CAPTURE_SCRATCH);
+const PROJECT = process.env.CAPTURE_PROJECT;
+const CODEX = path.join(PROJECT, "node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe");
+const OUT = path.join(SCRATCH, "out");
+const want = process.argv.slice(2);
+const wanted = (n) => !want.length || want.includes(n);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const MCP_TOKEN = "mcp-" + "check-token";
+const PROVIDER_KEY = "sk-" + "check-not-a-key";
+
+// --- The logging MCP server -----------------------------------------------------------------------------------------
+function startMcp({ mode = "ok" } = {}) {
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
+    req.on("end", () => {
+      const raw = Buffer.concat(chunks).toString("utf8");
+      let body = null;
+      try { body = JSON.parse(raw); } catch { /* not JSON */ }
+      const rec = { atMs: Date.now(), method: req.method, url: req.url, httpVersion: req.httpVersion, rawHeaders: req.rawHeaders, remotePort: req.socket.remotePort, body: body ?? raw };
+      requests.push(rec);
+      const send = (status, headers, text) => { rec.answer = { status, headers, body: text }; res.writeHead(status, headers); res.end(text); };
+      if (mode === "silent") return; // take the request and never answer
+      if (mode === "401") return send(401, { "www-authenticate": "Bearer realm=\"tarsee\"", "cache-control": "no-store", "content-type": "application/json" }, JSON.stringify({ jsonrpc: "2.0", error: { code: -32000, message: "This needs a live grant's token." }, id: null }));
+      if (req.method !== "POST") return send(405, { allow: "POST", "cache-control": "no-store", "content-type": "application/json" }, JSON.stringify({ jsonrpc: "2.0", error: { code: -32000, message: "Only POST is served here." }, id: null }));
+      const json = (result) => send(200, { "content-type": "application/json" }, JSON.stringify({ result, jsonrpc: "2.0", id: body.id }));
+      switch (body?.method) {
+        case "initialize": return json({ protocolVersion: body.params?.protocolVersion ?? "2025-06-18", capabilities: { tools: { listChanged: true } }, serverInfo: { name: "tarsee", version: "1.0.0" } });
+        case "notifications/initialized": return send(202, {}, "");
+        case "tools/list": return json({ tools: [
+          { name: "tarsee_datetime", description: "The date and time now.", inputSchema: { type: "object", properties: { timezone: { type: "string" } } } },
+          { name: "tarsee_slow", description: "A tool that takes a while.", inputSchema: { type: "object", properties: {} } },
+        ] });
+        case "tools/call":
+          if (body.params?.name === "tarsee_slow") return void setTimeout(() => json({ content: [{ type: "text", text: "slow done" }] }), 1500);
+          return json({ content: [{ type: "text", text: "It is noon." }], structuredContent: { hour: 12 } });
+        default: return send(200, { "content-type": "application/json" }, JSON.stringify({ jsonrpc: "2.0", error: { code: -32601, message: "no such method" }, id: body?.id ?? null }));
+      }
+    });
+  });
+  return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve({ server, requests, port: server.address().port, url: `http://127.0.0.1:${server.address().port}/mcp`, close: () => new Promise((r) => { server.closeAllConnections?.(); server.close(() => r()); }) })));
+}
+
+// --- The scripted stand-in for the Responses API --------------------------------------------------------------------
+const sse = (events) => events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join("");
+const usage = (u) => ({ input_tokens: u.input, input_tokens_details: { cached_tokens: u.cached ?? 0 }, output_tokens: u.output, output_tokens_details: { reasoning_tokens: u.reasoning ?? 0 }, total_tokens: u.input + u.output });
+function startModel(script) {
+  const requests = [];
+  let n = 0;
+  const server = http.createServer((req, res) => {
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
+    req.on("end", async () => {
+      const raw = Buffer.concat(chunks).toString("utf8");
+      let body = null;
+      try { body = JSON.parse(raw); } catch { /* not JSON */ }
+      const rec = { atMs: Date.now(), method: req.method, url: req.url, headers: req.headers, body };
+      requests.push(rec);
+      if (req.method !== "POST" || !/\/responses$/.test(req.url.split("?")[0])) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: { message: "not here" } })); return; }
+      const i = n++;
+      const reply = (typeof script === "function" ? script(body, i, rec) : script[i]) ?? { text: "ok" };
+      rec.reply = reply;
+      if (reply.hang) return; // never answer
+      if (reply.delayMs) await sleep(reply.delayMs);
+      if (reply.status) { res.writeHead(reply.status, { "content-type": "application/json" }); res.end(JSON.stringify({ error: reply.error ?? { message: "refused", type: "invalid_request_error", code: "refused" } })); return; }
+      const id = `resp_${i}`;
+      const events = [{ type: "response.created", response: { id } }];
+      let k = 0;
+      if (reply.reasoning) events.push({ type: "response.output_item.done", output_index: k++, item: { type: "reasoning", id: `rs_${i}`, summary: [{ type: "summary_text", text: reply.reasoning }], content: [], encrypted_content: null } });
+      if (reply.text != null) events.push({ type: "response.output_item.done", output_index: k++, item: { type: "message", role: "assistant", id: `msg_${i}`, status: "completed", content: [{ type: "output_text", text: reply.text, annotations: [] }] } });
+      for (const [j, c] of (reply.calls ?? []).entries()) {
+        const item = { type: "function_call", id: `fc_${i}_${j}`, call_id: `call_${i}_${j}`, name: c.name, arguments: typeof c.arguments === "string" ? c.arguments : JSON.stringify(c.arguments ?? {}), status: "completed" };
+        if (c.namespace) item.namespace = c.namespace;
+        events.push({ type: "response.output_item.done", output_index: k++, item });
+      }
+      events.push({ type: "response.completed", response: { id, status: "completed", usage: usage(reply.usage ?? { input: 1200, cached: 200, output: 30, reasoning: 12 }) } });
+      res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+      res.end(sse(events));
+    });
+  });
+  return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve({ server, requests, port: server.address().port, url: `http://127.0.0.1:${server.address().port}/v1`, close: () => new Promise((r) => { server.closeAllConnections?.(); server.close(() => r()); }) })));
+}
+
+// --- Starting the real program --------------------------------------------------------------------------------------
+function baseEnv(home, extra = {}) {
+  const tmp = path.join(SCRATCH, "tmp");
+  const user = path.join(SCRATCH, "home", "user");
+  fs.mkdirSync(home, { recursive: true }); fs.mkdirSync(tmp, { recursive: true }); fs.mkdirSync(user, { recursive: true });
+  return {
+    PATH: `${process.env.SYSTEMROOT}\\System32;${process.env.SYSTEMROOT};${process.env.SYSTEMROOT}\\System32\\WindowsPowerShell\\v1.0`,
+    SYSTEMROOT: process.env.SYSTEMROOT, WINDIR: process.env.SYSTEMROOT, SYSTEMDRIVE: process.env.SYSTEMDRIVE, COMSPEC: process.env.COMSPEC, PATHEXT: process.env.PATHEXT,
+    TEMP: tmp, TMP: tmp, USERPROFILE: user, HOMEDRIVE: path.parse(user).root.slice(0, 2), HOMEPATH: user.slice(2), APPDATA: path.join(user, "AppData", "Roaming"), LOCALAPPDATA: path.join(user, "AppData", "Local"),
+    HTTPS_PROXY: "http://127.0.0.1:9", HTTP_PROXY: "http://127.0.0.1:9", ALL_PROXY: "http://127.0.0.1:9", NO_PROXY: "127.0.0.1,localhost",
+    CODEX_HOME: home, CODEX_INTERNAL_ORIGINATOR_OVERRIDE: "codex_sdk_ts", TARSEE_MCP_TOKEN: MCP_TOKEN, TARSEE_PROVIDER_KEY: PROVIDER_KEY, TARSEE_CODEX_TURN: "0123456789abcdef01234567",
+    ...extra,
+  };
+}
+
+/** Tarsee's argument list for a custom provider (as captured through the SDK in out/t1-*.json), with the two addresses set. */
+function turnArgs({ mcpUrl, modelUrl, workspace, resume = null, images = [], model = "test-model", extraConfig = [], drop = [], replaceFirst = null, effort = "medium" }) {
+  const cfg = [
+    `developer_instructions="You are a check run."`, "project_doc_max_bytes=0", "project_root_markers=[]", `history.persistence="none"`, `cli_auth_credentials_store="file"`,
+    "check_for_update_on_startup=false", `model_reasoning_summary="none"`, "tool_output_token_limit=3000",
+    `shell_environment_policy.inherit="all"`, "shell_environment_policy.ignore_default_excludes=true",
+    ...["CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "TARSEE_MCP_TOKEN", "TARSEE_PROVIDER_KEY", "TARSEE_CHATGPT_ACCESS_TOKEN"].map((n) => `shell_environment_policy.filters.${n}="exclude"`),
+    `mcp_servers.tarsee.url=${JSON.stringify(mcpUrl)}`, `mcp_servers.tarsee.bearer_token_env_var="TARSEE_MCP_TOKEN"`, `mcp_servers.tarsee.default_tools_approval_mode="approve"`,
+    "mcp_servers.tarsee.required=true", "mcp_servers.tarsee.startup_timeout_sec=20", "mcp_servers.tarsee.tool_timeout_sec=300",
+    ...["apps", "plugins", "remote_plugin", "plugin_discovery_prefetch", "multi_agent", "goals", "computer_use", "browser_use", "browser_use_external", "in_app_browser", "image_generation", "tool_suggest", "skill_mcp_dependency_install", "memories", "hooks", "unbounded_connection_retries"].map((f) => `features.${f}=false`),
+    "model_auto_compact_token_limit=108800", `model_provider="tarsee_check"`, `model_providers.tarsee_check.name="Check"`, `model_providers.tarsee_check.base_url=${JSON.stringify(modelUrl)}`,
+    `model_providers.tarsee_check.env_key="TARSEE_PROVIDER_KEY"`, `model_providers.tarsee_check.wire_api="responses"`, `forced_login_method="api"`, "model_context_window=128000",
+  ].filter((c) => !drop.some((d) => c.startsWith(d)));
+  const args = ["exec", replaceFirst ?? "--experimental-json"];
+  for (const c of [...cfg, ...extraConfig]) args.push("--config", c);
+  if (model) args.push("--model", model);
+  args.push("--sandbox", "danger-full-access", "--cd", workspace, "--skip-git-repo-check");
+  if (effort) args.push("--config", `model_reasoning_effort="${effort}"`);
+  args.push("--config", "sandbox_workspace_write.network_access=true", "--config", `web_search="disabled"`, "--config", `approval_policy="never"`);
+  if (resume) args.push("resume", resume);
+  for (const f of images) args.push("--image", f);
+  return args;
+}
+
+function runCodex(args, { env, stdin = "Say hello.", closeStdin = true, closeStdinAfterMs = null, killAfterMs = null, killWhen = null, timeoutMs = 60000 } = {}) {
+  return new Promise((resolve) => {
+    const t0 = Date.now();
+    const child = spawn(CODEX, args, { env, windowsHide: true });
+    const out = []; const err = [];
+    const marks = { firstStdoutAtMs: null, firstStderrAtMs: null, stdinClosedAtMs: null, killedAtMs: null };
+    child.stdout.on("data", (b) => { marks.firstStdoutAtMs ??= Date.now() - t0; out.push(b); if (killWhen && !marks.killedAtMs && killWhen(Buffer.concat(out).toString("utf8"))) { setTimeout(() => { marks.killedAtMs = Date.now() - t0; child.kill(); }, killAfterMs ?? 0); marks.killedAtMs = -1; } });
+    child.stderr.on("data", (b) => { marks.firstStderrAtMs ??= Date.now() - t0; err.push({ atMs: Date.now() - t0, text: b.toString("utf8") }); });
+    child.stdin.on("error", (e) => { marks.stdinError = e.code || e.message; });
+    child.on("error", (e) => { marks.spawnError = e.message; });
+    if (stdin != null) child.stdin.write(stdin);
+    if (closeStdin && closeStdinAfterMs == null) { child.stdin.end(); marks.stdinClosedAtMs = Date.now() - t0; }
+    else if (closeStdinAfterMs != null) setTimeout(() => { marks.stdoutBytesBeforeStdinClosed = Buffer.concat(out).length; marks.stderrBeforeStdinClosed = err.map((e) => e.text).join(""); child.stdin.end(); marks.stdinClosedAtMs = Date.now() - t0; }, closeStdinAfterMs);
+    if (killAfterMs != null && !killWhen) setTimeout(() => { marks.killedAtMs = Date.now() - t0; child.kill(); }, killAfterMs);
+    const timer = setTimeout(() => { marks.timedOut = true; child.kill(); }, timeoutMs);
+    child.on("close", (code, signal) => {
+      clearTimeout(timer);
+      const stdout = Buffer.concat(out).toString("utf8");
+      resolve({ pid: child.pid, code, signal, ms: Date.now() - t0, marks, stdout, stdoutLines: stdout.split("\n").filter((l, i, a) => !(i === a.length - 1 && l === "")), stdoutEndsWithNewline: stdout.endsWith("\n"), stdoutHasCR: stdout.includes("\r"), stderr: err.map((e) => e.text).join(""), stderrPieces: err });
+    });
+  });
+}
+
+const parse = (lines) => lines.map((l) => { try { return JSON.parse(l); } catch { return { NOT_JSON: l }; } });
+const scrub = (s, map) => { let t = typeof s === "string" ? s : JSON.stringify(s, null, 1); for (const [from, to] of map) { for (const f of [from, from.replace(/\\/g, "\\\\"), from.replace(/\\/g, "/"), from.replace(/\\/g, "\\\\\\\\")]) t = t.split(f).join(to); } return t; };
+const write = (name, obj, map = []) => { fs.mkdirSync(OUT, { recursive: true }); fs.writeFileSync(path.join(OUT, `${name}.json`), scrub(obj, map)); console.log(`wrote ${name}`); };
+const listHome = (home) => { const out = []; const walk = (d, depth) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); const rel = path.relative(home, p).replace(/\\/g, "/"); if (e.isDirectory()) { out.push(rel + "/"); if (depth < 5 && !/^skills\/.system\/./.test(rel)) walk(p, depth + 1); } else out.push(rel); } }; try { walk(home, 0); } catch { /* none */ } return out.sort(); };
+const mcpSummary = (reqs) => reqs.map((r) => ({ method: r.method, url: r.url, httpVersion: r.httpVersion, headersInOrder: r.rawHeaders.reduce((a, v, i) => (i % 2 ? (a[a.length - 1] += `: ${v}`, a) : (a.push(v), a)), []), remotePort: r.remotePort, body: r.body, answerStatus: r.answer?.status }));
+
+const WORKSPACE = path.join(SCRATCH, "ws");
+fs.mkdirSync(WORKSPACE, { recursive: true });
+const state = {};
+
+// ---------------------------------------------------------------------------------------------------------------------
+if (wanted("r1")) {
+  const home = path.join(SCRATCH, "home", "r1"); fs.rmSync(home, { recursive: true, force: true });
+  const mcp = await startMcp(); const model = await startModel([{ text: "Hello there.", reasoning: "Thinking about hello.", usage: { input: 1200, cached: 200, output: 30, reasoning: 12 } }]);
+  const args = turnArgs({ mcpUrl: mcp.url, modelUrl: model.url, workspace: WORKSPACE, extraConfig: [] });
+  const t0 = Date.now();
+  const r = await runCodex(args, { env: baseEnv(home), stdin: "<turn-context>\nToday.\n</turn-context>\n\nSay hello. é☃😀" });
+  const events = parse(r.stdoutLines);
+  const firstMcpAt = mcp.requests[0]?.atMs - t0; const lastHandshakeAt = mcp.requests[2]?.atMs - t0;
+  const m = model.requests.find((q) => q.body);
+  state.threadId = events[0]?.thread_id; state.home = home;
+  const files = listHome(home);
+  const rollout = files.find((f) => /rollout-.*\.jsonl$/.test(f));
+  write("r1-new-thread", {
+    args, exit: { code: r.code, signal: r.signal, ms: r.ms }, stdoutEndsWithNewline: r.stdoutEndsWithNewline, stdoutHasCR: r.stdoutHasCR, stdoutLines: r.stdoutLines, stderr: r.stderr, marks: r.marks,
+    order: { mcpFirstRequestAtMs: firstMcpAt, mcpThirdRequestAtMs: lastHandshakeAt, firstStdoutAtMs: r.marks.firstStdoutAtMs },
+    mcp: mcpSummary(mcp.requests), mcpDistinctConnections: new Set(mcp.requests.map((q) => q.remotePort)).size,
+    modelRequests: model.requests.map((q) => ({ method: q.method, url: q.url, headers: q.headers, model: q.body?.model, stream: q.body?.stream, instructionsStart: String(q.body?.instructions ?? "").slice(0, 80), inputItems: (q.body?.input ?? []).map((it) => ({ type: it.type, role: it.role, content: (it.content ?? []).map((c) => ({ type: c.type, text: typeof c.text === "string" ? (c.text.length > 300 ? c.text.slice(0, 300) + "…" : c.text) : undefined })) })), tools: (q.body?.tools ?? []).map((t) => ({ type: t.type, name: t.name, sub: t.tools?.map((s) => s.name) })), reasoning: q.body?.reasoning, bodyKeys: q.body ? Object.keys(q.body) : null })),
+    homeAfter: files, rollout,
+    rolloutLineTypes: rollout ? fs.readFileSync(path.join(home, rollout), "utf8").split("\n").filter(Boolean).map((l) => { const j = JSON.parse(l); return `${j.type}${j.payload?.type ? ":" + j.payload.type : ""}`; }) : null,
+    rolloutFirstLineKeys: rollout ? Object.keys(JSON.parse(fs.readFileSync(path.join(home, rollout), "utf8").split("\n")[0])) : null,
+    rolloutSessionMeta: rollout ? (() => { const j = JSON.parse(fs.readFileSync(path.join(home, rollout), "utf8").split("\n")[0]); return { type: j.type, id: j.payload?.id, originator: j.payload?.originator, source: j.payload?.source, cwd: j.payload?.cwd, cli_version: j.payload?.cli_version }; })() : null,
+    rolloutTokenCounts: rollout ? fs.readFileSync(path.join(home, rollout), "utf8").split("\n").filter((l) => l.includes("total_token_usage")).map((l) => JSON.parse(l)) : null,
+    localNow: new Date().toString(),
+  }, [[SCRATCH, "<SCRATCH>"], [PROJECT, "<PROJECT>"]]);
+  await mcp.close(); await model.close();
+}
+
+if (wanted("r2")) {
+  // The same home and thread, resumed, with a picture.
+  if (!state.threadId) throw new Error("r2 needs r1 in the same run");
+  const png = path.join(SCRATCH, "tmp", "one pixel.png");
+  fs.writeFileSync(png, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64"));
+  const mcp = await startMcp(); const model = await startModel([{ text: "Second answer.", usage: { input: 1300, cached: 100, output: 40, reasoning: 5 } }]);
+  const args = turnArgs({ mcpUrl: mcp.url, modelUrl: model.url, workspace: WORKSPACE, resume: state.threadId, images: [png] });
+  const r = await runCodex(args, { env: baseEnv(state.home), stdin: "And again?" });
+  const files = listHome(state.home);
+  const rollouts = files.filter((f) => /rollout-.*\.jsonl$/.test(f));
+  const m = model.requests.find((q) => q.body);
+  write("r2-resumed-with-picture", {
+    args: args.slice(-12), exit: { code: r.code, signal: r.signal }, stdoutLines: r.stdoutLines, stderr: r.stderr,
+    sameThreadId: parse(r.stdoutLines)[0]?.thread_id === state.threadId,
+    mcpMethods: mcp.requests.map((q) => q.body?.method), rollouts,
+    modelInput: (m?.body?.input ?? []).map((it) => ({ type: it.type, role: it.role, content: (it.content ?? []).map((c) => ({ type: c.type, text: typeof c.text === "string" ? c.text.slice(0, 120) : undefined, image_url: typeof c.image_url === "string" ? c.image_url.slice(0, 40) + "…" : undefined })) })),
+    rolloutTokenCounts: rollouts[0] ? fs.readFileSync(path.join(state.home, rollouts[0]), "utf8").split("\n").filter((l) => l.includes("total_token_usage")).map((l) => JSON.parse(l).payload.info) : null,
+  }, [[SCRATCH, "<SCRATCH>"], [PROJECT, "<PROJECT>"]]);
+  await mcp.close(); await model.close();
+}
+
+if (wanted("r3")) {
+  const home = path.join(SCRATCH, "home", "r3"); fs.rmSync(home, { recursive: true, force: true });
+  const mcp = await startMcp();
+  const model = await startModel((body, i) => (i === 0 ? { calls: [{ name: "tarsee_datetime", namespace: "mcp__tarsee", arguments: { timezone: "UTC" } }] } : { text: "It is noon." }));
+  const args = turnArgs({ mcpUrl: mcp.url, modelUrl: model.url, workspace: WORKSPACE });
+  const r = await runCodex(args, { env: baseEnv(home), stdin: "What time is it?" });
+  write("r3-mcp-tool-call", { exit: { code: r.code }, stdoutLines: r.stdoutLines, stderr: r.stderr, mcp: mcpSummary(mcp.requests), mcpDistinctConnections: new Set(mcp.requests.map((q) => q.remotePort)).size,
+    toolsOffered: (model.requests[0]?.body?.tools ?? []).map((t) => ({ type: t.type, name: t.name, description: t.description?.slice(0, 60), sub: t.tools?.map((s) => ({ name: s.name, type: s.type })) })),
+    secondRequestLastInput: (model.requests[1]?.body?.input ?? []).slice(-2) }, [[SCRATCH, "<SCRATCH>"], [PROJECT, "<PROJECT>"]]);
+  state.toolsFirst = model.requests[0]?.body?.tools;
+  fs.writeFileSync(path.join(OUT, "r3-tools-offered-full.json"), JSON.stringify(model.requests[0]?.body?.tools, null, 1));
+  await mcp.close(); await model.close();
+}
+
+if (wanted("r4")) {
+  const out = {};
+  const home = path.join(SCRATCH, "home", "r4"); fs.rmSync(home, { recursive: true, force: true });
+  const mcp = await startMcp(); const model = await startModel(() => ({ text: "ok" }));
+  const args = turnArgs({ mcpUrl: mcp.url, modelUrl: model.url, workspace: WORKSPACE });
+  const one = async (k, a, o) => { const before = mcp.requests.length; const mb = model.requests.length; const r = await runCodex(a, { env: baseEnv(home), ...o }); out[k] = { exit: { code: r.code, signal: r.signal, ms: r.ms }, stdoutLines: r.stdoutLines, stderr: r.stderr, marks: r.marks, mcpRequests: mcp.requests.length - before, modelRequests: model.requests.length - mb, modelUserText: model.requests.slice(mb).map((q) => (q.body?.input ?? []).filter((it) => it.role === "user").map((it) => (it.content ?? []).map((c) => c.text ?? `[${c.type}]`).join("|"))) }; };
+  await one("emptyStdin", args, { stdin: "" });
+  await one("whitespaceOnlyStdin", args, { stdin: "  \n\n" });
+  await one("stdinLeftOpen3s", args, { stdin: "Late close.", closeStdinAfterMs: 3000 });
+  await one("promptWithTrailingNewlines", args, { stdin: "Ends with newlines.\n\n\n" });
+  const png = path.join(SCRATCH, "tmp", "one pixel.png");
+  if (!fs.existsSync(png)) fs.writeFileSync(png, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64"));
+  await one("emptyStdinWithPicture", turnArgs({ mcpUrl: mcp.url, modelUrl: model.url, workspace: WORKSPACE, images: [png] }), { stdin: "" });
+  await one("pictureFileMissing", turnArgs({ mcpUrl: mcp.url, modelUrl: model.url, workspace: WORKSPACE, images: [path.join(SCRATCH, "tmp", "no-such.png")] }), { stdin: "Look." });
+  await one("jsonInsteadOfExperimentalJson", turnArgs({ mcpUrl: mcp.url, modelUrl: model.url, workspace: WORKSPACE, replaceFirst: "--json" }), { stdin: "Hello." });
+  await one("resumeUnknownThread", turnArgs({ mcpUrl: mcp.url, modelUrl: model.url, workspace: WORKSPACE, resume: "01a1c000-0000-7000-8000-0000000000aa" }), { stdin: "Hello." });
+  await one("resumeNotAUuid", turnArgs({ mcpUrl: mcp.url, modelUrl: model.url, workspace: WORKSPACE, resume: "not-a-uuid" }), { stdin: "Hello." });
+  write("r4-stdin-and-resume", out, [[SCRATCH, "<SCRATCH>"], [PROJECT, "<PROJECT>"]]);
+  await mcp.close(); await model.close();
+}
+
+if (wanted("r5")) {
+  const out = {};
+  const home = path.join(SCRATCH, "home", "r5"); fs.rmSync(home, { recursive: true, force: true });
+  const mcp = await startMcp(); const model = await startModel(() => ({ text: "ok" }));
+  const base = { mcpUrl: mcp.url, modelUrl: model.url, workspace: WORKSPACE };
+  const one = async (k, a, o = {}) => { const mb = model.requests.length; const r = await runCodex(a, { env: baseEnv(home, o.env), stdin: "Hello." }); out[k] = { exit: { code: r.code, signal: r.signal }, stdoutLines: r.stdoutLines, stderr: r.stderr, modelRequests: model.requests.length - mb, modelSaw: model.requests.slice(mb).map((q) => ({ model: q.body?.model, effort: q.body?.reasoning?.effort, summary: q.body?.reasoning?.summary })) }; };
+  await one("unknownOption", [...turnArgs(base), "--bogus"]);
+  await one("badSandboxValue", turnArgs(base).map((a) => (a === "danger-full-access" ? "wide-open" : a)));
+  await one("configWithoutEquals", turnArgs({ ...base, extraConfig: ["justakey"] }));
+  await one("badApprovalPolicyWord", turnArgs(base).map((a) => (a === `approval_policy="never"` ? `approval_policy="sometimes"` : a)));
+  await one("wrongType", turnArgs({ ...base, extraConfig: [`model_context_window="big"`] }));
+  await one("unknownKey", turnArgs({ ...base, extraConfig: [`not_a_real_setting=1`] }));
+  await one("laterConfigWins_effort", turnArgs({ ...base, extraConfig: [`model_reasoning_effort="low"`], effort: "high" }));
+  await one("laterConfigWins_model", [...turnArgs(base), "--config", `model="from-late-config"`]);
+  await one("providerNotDefined", turnArgs({ ...base, extraConfig: [`model_provider="nobody"`] }));
+  await one("cdMissingFolder", turnArgs({ ...base, workspace: path.join(SCRATCH, "no-such-folder") }));
+  await one("providerKeyVariableUnset", turnArgs(base), { env: { TARSEE_PROVIDER_KEY: undefined } });
+  await one("unquotedStringValue", turnArgs({ ...base, extraConfig: [`model_reasoning_summary=none`] }));
+  await one("badEffortWord", turnArgs({ ...base, effort: "extreme" }));
+  write("r5-refused-arguments", out, [[SCRATCH, "<SCRATCH>"], [PROJECT, "<PROJECT>"]]);
+  await mcp.close(); await model.close();
+}
+
+if (wanted("r6")) {
+  const out = {};
+  const home = path.join(SCRATCH, "home", "r6"); fs.rmSync(home, { recursive: true, force: true });
+  const model = await startModel(() => ({ text: "ok" }));
+  const dead = await runCodex(turnArgs({ mcpUrl: "http://127.0.0.1:9/mcp", modelUrl: model.url, workspace: WORKSPACE }), { env: baseEnv(home) });
+  out.nothingListening = { exit: { code: dead.code, ms: dead.ms }, stdoutLines: dead.stdoutLines, stderr: dead.stderr, modelRequests: model.requests.length };
+  const mcp401 = await startMcp({ mode: "401" });
+  const r401 = await runCodex(turnArgs({ mcpUrl: mcp401.url, modelUrl: model.url, workspace: WORKSPACE }), { env: baseEnv(home) });
+  out.answers401 = { exit: { code: r401.code, ms: r401.ms }, stdoutLines: r401.stdoutLines, stderr: r401.stderr, requests: mcpSummary(mcp401.requests) };
+  await mcp401.close();
+  const mcp = await startMcp();
+  const unset = await runCodex(turnArgs({ mcpUrl: mcp.url, modelUrl: model.url, workspace: WORKSPACE }), { env: baseEnv(home, { TARSEE_MCP_TOKEN: undefined }) });
+  out.tokenVariableUnset = { exit: { code: unset.code, ms: unset.ms }, stdoutLines: unset.stdoutLines, stderr: unset.stderr, requests: mcp.requests.length };
+  const noRoot = await runCodex(turnArgs({ mcpUrl: mcp.url, modelUrl: model.url, workspace: WORKSPACE }), { env: baseEnv(home, { SYSTEMROOT: undefined, WINDIR: undefined }) });
+  out.withoutSystemRoot = { exit: { code: noRoot.code, ms: noRoot.ms }, stdoutLines: noRoot.stdoutLines, stderr: noRoot.stderr, requests: mcp.requests.length };
+  write("r6-mcp-failures", out, [[SCRATCH, "<SCRATCH>"], [PROJECT, "<PROJECT>"]]);
+  await mcp.close(); await model.close();
+}
+
+if (wanted("r7")) {
+  const out = {};
+  const home = path.join(SCRATCH, "home", "r7"); fs.rmSync(home, { recursive: true, force: true });
+  const mcp = await startMcp();
+  for (const [k, reply] of Object.entries({
+    status401: { status: 401, error: { message: "Incorrect API key provided.", type: "invalid_request_error", code: "invalid_api_key" } },
+    status404: { status: 404, error: { message: "The model `test-model` does not exist.", type: "invalid_request_error", code: "model_not_found" } },
+    status400: { status: 400, error: { message: "Bad request body.", type: "invalid_request_error", code: "bad" } },
+    status429: { status: 429, error: { message: "Rate limit reached.", type: "rate_limit_error", code: "rate_limit_exceeded" } },
+    status500: { status: 500, error: { message: "Server had a problem.", type: "server_error", code: "server_error" } },
+  })) {
+    const model = await startModel(() => reply);
+    const t0 = Date.now();
+    const r = await runCodex(turnArgs({ mcpUrl: mcp.url, modelUrl: model.url, workspace: WORKSPACE, extraConfig: k === "status500" ? ["model_providers.tarsee_check.request_max_retries=1", "model_providers.tarsee_check.stream_max_retries=1"] : [] }), { env: baseEnv(home), timeoutMs: 120000 });
+    out[k] = { exit: { code: r.code, ms: r.ms }, stdoutLines: r.stdoutLines, stderr: r.stderr, modelRequests: model.requests.length, requestTimesMs: model.requests.map((q) => q.atMs - t0) };
+    await model.close();
+  }
+  write("r7-provider-errors", out, [[SCRATCH, "<SCRATCH>"], [PROJECT, "<PROJECT>"]]);
+  await mcp.close();
+}
+
+if (wanted("r8")) {
+  // Stop: the real program terminated the way Node's child.kill() (and Rust's Child::kill()) does it on Windows.
+  const out = {};
+  const home = path.join(SCRATCH, "home", "r8"); fs.rmSync(home, { recursive: true, force: true });
+  const mcp = await startMcp();
+  // (a) while the model's answer hangs
+  let model = await startModel(() => ({ hang: true }));
+  let r = await runCodex(turnArgs({ mcpUrl: mcp.url, modelUrl: model.url, workspace: WORKSPACE }), { env: baseEnv(home), killAfterMs: 400, killWhen: (s) => s.includes("turn.started") });
+  out.killedWhileTheModelHangs = { exit: { code: r.code, signal: r.signal, ms: r.ms }, marks: r.marks, stdoutLines: r.stdoutLines, stderr: r.stderr };
+  await model.close();
+  // (b) while a slow MCP tool runs
+  model = await startModel((body, i) => (i === 0 ? { calls: [{ name: "tarsee_slow", namespace: "mcp__tarsee", arguments: {} }] } : { text: "done" }));
+  r = await runCodex(turnArgs({ mcpUrl: mcp.url, modelUrl: model.url, workspace: WORKSPACE }), { env: baseEnv(home), killAfterMs: 300, killWhen: (s) => s.includes("item.started") });
+  out.killedWhileAnMcpToolRuns = { exit: { code: r.code, signal: r.signal, ms: r.ms }, marks: r.marks, stdoutLines: r.stdoutLines, stderr: r.stderr };
+  await model.close();
+  write("r8-stop", out, [[SCRATCH, "<SCRATCH>"], [PROJECT, "<PROJECT>"]]);
+  await mcp.close();
+}
+
+if (wanted("r9")) {
+  // Stop while a command the model asked for is running: does the command outlive the program on Windows?
+  const out = {};
+  const home = path.join(SCRATCH, "home", "r9"); fs.rmSync(home, { recursive: true, force: true });
+  const beatFile = path.join(SCRATCH, "tmp", "r9-beat.txt"); fs.rmSync(beatFile, { force: true });
+  const cmd = `$i=0; while($i -lt 400){ Set-Content -LiteralPath '${beatFile}' -Value $i; Start-Sleep -Milliseconds 100; $i++ }`;
+  const mcp = await startMcp();
+  const model = await startModel((body, i) => (i === 0 ? { calls: [{ name: "exec_command", arguments: { cmd, yield_time_ms: 30000 } }] } : { text: "done" }));
+  const p = runCodex(turnArgs({ mcpUrl: mcp.url, modelUrl: model.url, workspace: WORKSPACE }), { env: baseEnv(home), stdin: "Run the loop.", killAfterMs: 2500, killWhen: (s2) => s2.includes("command_execution") });
+  const r = await p;
+  const read = () => { try { return fs.readFileSync(beatFile, "utf8").trim(); } catch { return null; } };
+  const atKill = read(); await sleep(1500); const later = read(); await sleep(1500); const latest = read();
+  out.commandRunningWhenTheProgramIsTerminated = { exit: { code: r.code, signal: r.signal }, marks: r.marks, stdoutLines: r.stdoutLines, stderr: r.stderr, beat: { rightAfterTheProgramEnded: atKill, after1500ms: later, after3000ms: latest }, commandStillRunningAfterwards: later !== latest };
+  await model.close();
+  // The same command left to finish quickly, for the item's shape at the end.
+  const model2 = await startModel((body, i) => (i === 0 ? { calls: [{ name: "exec_command", arguments: { cmd: "Write-Output 'one'; Write-Error 'two'; exit 3" } }] } : { text: "done" }));
+  const r2 = await runCodex(turnArgs({ mcpUrl: mcp.url, modelUrl: model2.url, workspace: WORKSPACE }), { env: baseEnv(home), stdin: "Run it." });
+  out.commandThatExits3 = { exit: { code: r2.code }, stdoutLines: r2.stdoutLines, stderr: r2.stderr };
+  await model2.close();
+  write("r9-stop-with-a-command-running", out, [[SCRATCH, "<SCRATCH>"], [PROJECT, "<PROJECT>"]]);
+  await mcp.close();
+}
+
+if (wanted("r10")) {
+  // The real program started by a Rust std::process::Command (rs/launch.rs), not by Node.
+  const { launchAsync } = await import("./rust-checks.mjs");
+  const out = {};
+  const home = path.join(SCRATCH, "home", "r10"); fs.rmSync(home, { recursive: true, force: true }); fs.mkdirSync(home, { recursive: true });
+  const mcp = await startMcp(); const model = await startModel(() => ({ text: "ok" }));
+  const args = turnArgs({ mcpUrl: mcp.url, modelUrl: model.url, workspace: WORKSPACE });
+  const four = { CODEX_HOME: home, TARSEE_MCP_TOKEN: MCP_TOKEN, TARSEE_PROVIDER_KEY: PROVIDER_KEY, TARSEE_CODEX_TURN: "0123456789abcdef01234567", CODEX_INTERNAL_ORIGINATOR_OVERRIDE: "codex_sdk_ts" };
+  const one = async (k, env, opts = {}) => { const mb = mcp.requests.length; const qb = model.requests.length; const r = await launchAsync(`real-${k}`, { program: CODEX, args, env, envClear: true, stdin: Buffer.from("Hello."), opts }); out[k] = { envNames: Object.keys(env), result: r.result, stdoutLines: (r.stdout ?? "").split("\n").filter(Boolean), stderr: r.stderr, mcpRequests: mcp.requests.length - mb, modelRequests: model.requests.length - qb }; };
+  await one("fiveNamesOnly", four);
+  await one("fiveNamesAndSystemRoot", { ...four, SYSTEMROOT: process.env.SYSTEMROOT });
+  await one("fiveNamesAndSystemRoot_noWindowFlag", { ...four, SYSTEMROOT: process.env.SYSTEMROOT }, { no_window: 1 });
+  write("r10-started-by-rust-command", out, [[SCRATCH, "<SCRATCH>"], [PROJECT, "<PROJECT>"]]);
+  await model.close();
+  const hang = await startModel(() => ({ hang: true }));
+  const argsHang = turnArgs({ mcpUrl: mcp.url, modelUrl: hang.url, workspace: WORKSPACE });
+  const rk = await launchAsync("real-kill", { program: CODEX, args: argsHang, env: { ...four, SYSTEMROOT: process.env.SYSTEMROOT }, envClear: true, stdin: Buffer.from("Hello."), opts: { kill_after_ms: 2500 } });
+  out.childKillMidTurn = { result: rk.result, stdoutLines: (rk.stdout ?? "").split("\n").filter(Boolean), stderr: rk.stderr };
+  write("r10-started-by-rust-command", out, [[SCRATCH, "<SCRATCH>"], [PROJECT, "<PROJECT>"]]);
+  await hang.close(); await mcp.close();
+}
+
+if (wanted("r11")) {
+  // The invocations outside a turn, with nobody signed in: login status, logout, mcp list/get.
+  const out = {};
+  const home = path.join(SCRATCH, "home", "r11"); fs.rmSync(home, { recursive: true, force: true });
+  const env = baseEnv(home, { TARSEE_MCP_TOKEN: undefined, TARSEE_PROVIDER_KEY: undefined, TARSEE_CODEX_TURN: undefined, CODEX_INTERNAL_ORIGINATOR_OVERRIDE: undefined });
+  const BASE = ["-c", 'cli_auth_credentials_store="file"', "-c", "check_for_update_on_startup=false", "-c", "project_root_markers=[]"];
+  const one = async (k, a, o = {}) => { const r = await runCodex([...BASE, ...a], { env: { ...env, ...(o.env ?? {}) }, stdin: null, timeoutMs: 30000 }); out[k] = { args: [...BASE, ...a], exit: { code: r.code, signal: r.signal, ms: r.ms }, stdout: r.stdout, stderr: r.stderr, homeAfter: listHome(home) }; };
+  await one("loginStatus_noAuth", ["login", "status"]);
+  await one("logout_noAuth", ["logout"]);
+  fs.writeFileSync(path.join(home, "auth.json"), JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "sk-" + "check-1234567890abcdefXYZ12" }));
+  await one("loginStatus_apiKey", ["login", "status"]);
+  fs.rmSync(path.join(home, "auth.json"), { force: true });
+  const mcp = await startMcp();
+  const pairs = ["-c", `mcp_servers.tarsee.url="${mcp.url}"`, "-c", 'mcp_servers.tarsee.bearer_token_env_var="TARSEE_MCP_TOKEN"', "-c", 'mcp_servers.tarsee.default_tools_approval_mode="approve"', "-c", "mcp_servers.tarsee.required=true", "-c", "mcp_servers.tarsee.startup_timeout_sec=20", "-c", "mcp_servers.tarsee.tool_timeout_sec=300"];
+  await one("mcpList", [...pairs, "mcp", "list", "--json"], { env: { TARSEE_MCP_TOKEN: MCP_TOKEN } });
+  await one("mcpGet", [...pairs, "mcp", "get", "tarsee", "--json"], { env: { TARSEE_MCP_TOKEN: MCP_TOKEN } });
+  out.mcpRequestsReceived = mcp.requests.length;
+  await mcp.close();
+  // The hidden option the earlier captures used: is it accepted? (Pointed at a port nothing listens on.)
+  await one("deviceAuth_hiddenIssuerOption_deadPort", ["login", "--device-auth", "--experimental_issuer", "http://127.0.0.1:9"]);
+  write("r11-outside-a-turn", out, [[SCRATCH, "<SCRATCH>"], [PROJECT, "<PROJECT>"]]);
+}
+
+if (wanted("r12")) {
+  // The same stop, with the program started by a Rust Command (no Node between) and ended by Child::kill().
+  const { launchAsync } = await import("./rust-checks.mjs");
+  const home = path.join(SCRATCH, "home", "r12"); fs.rmSync(home, { recursive: true, force: true }); fs.mkdirSync(home, { recursive: true });
+  const beatFile = path.join(SCRATCH, "tmp", "r12-beat.txt"); fs.rmSync(beatFile, { force: true });
+  const cmd = "$i=0; while($i -lt 400){ Set-Content -LiteralPath '" + beatFile + "' -Value $i; Start-Sleep -Milliseconds 100; $i++ }";
+  const mcp = await startMcp();
+  const model = await startModel((body, i) => (i === 0 ? { calls: [{ name: "exec_command", arguments: { cmd, yield_time_ms: 30000 } }] } : { text: "done" }));
+  const env = { CODEX_HOME: home, TARSEE_MCP_TOKEN: MCP_TOKEN, TARSEE_PROVIDER_KEY: PROVIDER_KEY, TARSEE_CODEX_TURN: "0123456789abcdef01234567", CODEX_INTERNAL_ORIGINATOR_OVERRIDE: "codex_sdk_ts", SYSTEMROOT: process.env.SYSTEMROOT, PATH: process.env.SYSTEMROOT + "\System32;" + process.env.SYSTEMROOT + "\System32\WindowsPowerShell\v1.0", TEMP: path.join(SCRATCH, "tmp"), USERPROFILE: path.join(SCRATCH, "home", "user") };
+  const r = await launchAsync("real-kill-command", { program: CODEX, args: turnArgs({ mcpUrl: mcp.url, modelUrl: model.url, workspace: WORKSPACE }), env, envClear: true, stdin: Buffer.from("Run the loop."), opts: { kill_after_ms: 6000, no_window: 1 } });
+  const read = () => { try { return fs.readFileSync(beatFile, "utf8").trim(); } catch { return null; } };
+  const atKill = read(); await sleep(1500); const later = read(); await sleep(1500); const latest = read();
+  write("r12-rust-kill-with-a-command-running", { envNames: Object.keys(env), result: r.result, stdoutLines: (r.stdout ?? "").split("\n").filter(Boolean), stderr: r.stderr, beat: { rightAfterTheProgramEnded: atKill, after1500ms: later, after3000ms: latest }, commandStillRunningAfterwards: later !== latest }, [[SCRATCH, "<SCRATCH>"], [PROJECT, "<PROJECT>"]]);
+  await model.close(); await mcp.close();
+}
+
+if (wanted("r13")) {
+  // An MCP endpoint that takes the request and never answers: what the program does, and after how long.
+  const home = path.join(SCRATCH, "home", "r13"); fs.rmSync(home, { recursive: true, force: true });
+  const mcp = await startMcp({ mode: "silent" }); const model = await startModel(() => ({ text: "ok" }));
+  const r = await runCodex(turnArgs({ mcpUrl: mcp.url, modelUrl: model.url, workspace: WORKSPACE }), { env: baseEnv(home), timeoutMs: 60000 });
+  write("r13-mcp-endpoint-silent", { exit: { code: r.code, signal: r.signal, ms: r.ms }, stdoutLines: r.stdoutLines, stderr: r.stderr, requestsTheEndpointTook: mcp.requests.map((q) => q.body?.method), modelRequests: model.requests.length }, [[SCRATCH, "<SCRATCH>"], [PROJECT, "<PROJECT>"]]);
+  await model.close(); await mcp.close();
+}
+
+if (wanted("r0")) {
+  // The program's own help for every command the document names, and a few words looked for in its binary.
+  const { execFileSync } = await import("node:child_process");
+  const home = path.join(SCRATCH, "home", "help"); fs.mkdirSync(home, { recursive: true });
+  const env = baseEnv(home);
+  for (const [name, args] of Object.entries({ "exec": ["exec"], "exec-resume": ["exec", "resume"], "root": [], "mcp": ["mcp"], "mcp-list": ["mcp", "list"], "mcp-get": ["mcp", "get"], "login": ["login"], "login-status": ["login", "status"], "logout": ["logout"], "app-server": ["app-server"], "archive": ["archive"] })) {
+    fs.writeFileSync(path.join(OUT, `help-${name}.txt`), execFileSync(CODEX, [...args, "--help"], { env, encoding: "utf8" }).replace(/\r\n/g, "\n"));
+  }
+  const binary = fs.readFileSync(CODEX);
+  const found = Object.fromEntries(["archived_sessions", "experimental_issuer", "device auth timed out after 15 minutes", "https://auth.openai.com/oauth/revoke", "CODEX_INTERNAL_ORIGINATOR_OVERRIDE"].map((w) => [w, binary.includes(Buffer.from(w, "utf8"))]));
+  fs.writeFileSync(path.join(OUT, "strings.json"), JSON.stringify({ note: "looked for in the binary's bytes", version: execFileSync(CODEX, ["--version"], { env, encoding: "utf8" }).trim(), ...found }, null, 1));
+  console.log("wrote help-*.txt and strings.json");
+}
+
+console.log("done");
+process.exit(0);

@@ -1,0 +1,326 @@
+#!/usr/bin/env node
+/**
+ * capture-turns.mjs: what Tarsee's Codex engine starts, recorded.
+ *
+ * Each scenario calls Tarsee's own engine (src/ai/providers/codex.js run()) the way the turn layer calls it. The
+ * engine builds its options (providers/codex-options.js), constructs the REAL @openai/codex-sdk Codex class and calls
+ * startThread()/resumeThread() and runStreamed(), and the SDK starts the program it is given. That program is the stub
+ * (stub/codex-stub.rs, compiled): it records its argument list, working folder, environment and stdin, and plays a
+ * scripted stdout back so the SDK goes through a whole turn. Nothing signs in, nothing reaches a network, every key
+ * is a fake built from parts.
+ *
+ *   node capture-turns.mjs [scenario ...]
+ *
+ * Needs: PROJECT (the Node checkout, with node_modules; read-only), SCRATCH (a folder of its own), OUT (where the
+ * fixtures go). All three have defaults below. Nothing is written into PROJECT: TARSEE_STATE_DIR and the temp folder
+ * are pointed into SCRATCH before any of Tarsee's modules load (config/env.js creates its folders when it loads).
+ */
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+const PROJECT = process.env.CAPTURE_PROJECT || "/path/to/the/node/checkout";
+const SCRATCH = process.env.CAPTURE_SCRATCH || "/path/to/a/scratch/folder";
+const OUT = process.env.CAPTURE_OUT || path.join(SCRATCH, "fixtures");
+const STUB_DIR = path.join(SCRATCH, "stub");
+const STUB = path.join(STUB_DIR, process.platform === "win32" ? "codex-stub.exe" : "codex-stub");
+const PLAN = path.join(STUB_DIR, "plan");
+const RUNS = path.join(SCRATCH, "runs");
+const TMP = path.join(SCRATCH, "tmp");
+
+fs.mkdirSync(TMP, { recursive: true });
+fs.mkdirSync(OUT, { recursive: true });
+process.env.TARSEE_STATE_DIR = path.join(SCRATCH, "tarsee-state");
+process.env.TEMP = TMP;
+process.env.TMP = TMP;
+process.env.TMPDIR = TMP;
+
+const from = (rel) => import(pathToFileURL(path.join(PROJECT, rel)).href);
+const { run } = await from("src/ai/providers/codex.js");
+const { Codex: RealCodex } = await from("node_modules/@openai/codex-sdk/dist/index.js");
+
+// --- Fakes: keys built from parts, so nothing here is a key --------------------------------------------------------
+
+const fake = (...parts) => parts.join("");
+const KEYS = {
+  openai: fake("sk-", "test-not-a-key-", "openai"),
+  openrouter: fake("sk-or-v1-", "testnotakey", "openrouter"),
+  deepseek: fake("sk-", "testnotakey", "deepseek"),
+  local: fake("sk-", "test-not-a-key-", "local-owner"),
+};
+const MCP_TOKEN = fake("mcp-", "test-token-", "not-a-token");
+const MCP_URL = "http://127.0.0.1:45123/mcp";
+const VAULT = { SCRIPT_KEY: fake("vault-", "value-", "for-scripts") };
+/** What sits in the server's own environment and must not reach codex (engine-env.js strips each). */
+const SERVER_ONLY = {
+  OPENAI_API_KEY: fake("sk-", "server-", "openai"), OPENROUTER_API_KEY: fake("sk-or-v1-", "server"), DEEPSEEK_API_KEY: fake("sk-", "server-", "deepseek"),
+  TARSEE_LOCAL_AI_KEY: fake("sk-", "server-", "local"), CODEX_API_KEY: fake("sk-", "server-", "codex"), CODEX_ACCESS_TOKEN: fake("at-", "server"),
+  CODEX_HOME: "C:/somewhere/else", OPENAI_BASE_URL: "http://server-env.invalid/v1", ANTHROPIC_API_KEY: fake("sk-ant-", "server"),
+  TARSEE_PROVIDER_KEY: fake("pk-", "server"), TARSEE_MCP_TOKEN: fake("mt-", "server"), TARSEE_CHATGPT_ACCESS_TOKEN: fake("ct-", "server"),
+  ENCRYPTION_KEY: fake("enc-", "server"), SETUP_PASSWORD: fake("pw-", "server"), TARSEE_API_TOKEN: fake("api-", "server"),
+};
+/**
+ * The rest of the server's environment: the few names a Windows program needs to start (with plain values, so no
+ * machine's own PATH ends up in a fixture), and one ordinary setting.
+ */
+function serverEnv() {
+  const base = process.platform === "win32"
+    ? { PATH: "C:\WINDOWS\system32;C:\WINDOWS", SystemRoot: "C:\WINDOWS", SystemDrive: "C:", ComSpec: "C:\WINDOWS\system32\cmd.exe", TEMP: TMP, TMP }
+    : { PATH: "/usr/local/bin:/usr/bin:/bin", TMPDIR: TMP };
+  return { ...base, NODE_ENV: "production", MY_APP_SETTING: "kept", ...SERVER_ONLY };
+}
+
+function makeStore(values = {}, keys = KEYS) {
+  const m = new Map(Object.entries(values));
+  return {
+    get: (k) => (m.has(k) ? m.get(k) : null),
+    set: (k, v) => { m.set(k, v); },
+    delete: (k) => { m.delete(k); },
+    getKeyWithSource: (id) => ({ key: keys[id] ?? null, source: keys[id] ? "settings" : null }),
+  };
+}
+
+// 1x1 pictures.
+const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+const JPEG = "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/yQALCAABAAEBAREA/8wABgAQEAX/2gAIAQEAAD8A0s8g/9k=";
+const picture = (media_type, data) => ({ type: "image", source: { type: "base64", media_type, data } });
+
+const THREAD = "01a1c000-0000-7000-8000-0000000000aa";
+const reply = (threadId = THREAD) => [
+  { type: "thread.started", thread_id: threadId },
+  { type: "turn.started" },
+  { type: "item.completed", item: { id: "item_0", type: "agent_message", text: "Hello from the stub." } },
+  { type: "turn.completed", usage: { input_tokens: 1200, cached_input_tokens: 200, output_tokens: 30, reasoning_output_tokens: 12 } },
+];
+
+// --- Scenarios -----------------------------------------------------------------------------------------------------
+
+const SCENARIOS = {
+  "01-chatgpt-new-thread": {
+    why: "ChatGPT plan, new thread. The account's model list is not known, so no --model; no effort. forced_login_method \"chatgpt\"; no key anywhere.",
+    provider: "chatgpt", model: "gpt-6.1-sol", accountModels: [],
+  },
+  "02-chatgpt-resume-model-effort": {
+    why: "ChatGPT plan, resumed thread, the account lists the model (so --model is sent) with the efforts it takes (so model_reasoning_effort is sent).",
+    provider: "chatgpt", model: "gpt-6.1-sol", effort: "high",
+    accountModels: [{ id: "gpt-6.1-sol", label: "GPT-6.1-Sol", efforts: ["low", "medium", "high"], default: true }],
+    sessionHandle: `chatgpt/cxd/chatgpt:${THREAD}`,
+  },
+  "03-chatgpt-effort-not-offered": {
+    why: "ChatGPT plan: an effort the account's model does not list is left out, the model is still named.",
+    provider: "chatgpt", model: "gpt-6.1-sol", effort: "xhigh",
+    accountModels: [{ id: "gpt-6.1-sol", label: "GPT-6.1-Sol", efforts: ["low", "medium"], default: true }],
+  },
+  "04-openai-new-thread": {
+    why: "OpenAI key, new thread, effort xhigh, reasoning summaries on. The key goes to the SDK as apiKey and reaches the program only as CODEX_API_KEY; openai_base_url is passed in config (never as the SDK's baseUrl).",
+    provider: "openai", model: "gpt-5.5", effort: "xhigh", thinkingSummaries: true,
+  },
+  "05-openai-resume": {
+    why: "OpenAI key, resumed thread: `resume <thread id>` comes after every option.",
+    provider: "openai", model: "gpt-5.5", sessionHandle: `openai/cx/openai:${THREAD}`,
+  },
+  "06-openai-new-thread-pictures": {
+    why: "OpenAI key, new thread, two pictures: each is written to a private temp folder and passed as --image <file> after every option.",
+    provider: "openai", model: "gpt-5.5", media: [picture("image/png", PNG), picture("image/jpeg", JPEG)],
+  },
+  "07-openrouter-new-thread": {
+    why: "OpenRouter: a custom Responses provider (model_providers.tarsee_openrouter) with its attribution headers; the key is in TARSEE_PROVIDER_KEY (env_key).",
+    provider: "openrouter", model: "openai/gpt-5.5", effort: "medium",
+    store: { "ai.openrouter.appTitle": "My Tarsee", "ai.openrouter.referer": "https://example.test/tarsee" },
+  },
+  "08-openrouter-resume-pictures": {
+    why: "OpenRouter, resumed thread with a picture: `resume <thread id>` then `--image <file>`. No title or referer set, so the default title and no HTTP-Referer.",
+    provider: "openrouter", model: "openai/gpt-5.5", sessionHandle: `openrouter/cx/openai:${THREAD}`, media: [picture("image/png", PNG)],
+  },
+  "09-deepseek-new-thread": {
+    why: "DeepSeek on Codex: a custom Responses provider on DeepSeek's host. No volatile system part, so the prompt has no <turn-context> block.",
+    provider: "deepseek", model: "deepseek-flash", systemParts: { stable: "You are Tarsee (capture run).", volatile: "" },
+  },
+  "10-local-new-thread": {
+    why: "Local AI through the bridge: base_url is the turn's bridge address, TARSEE_PROVIDER_KEY the bridge's per-turn token (never the owner's key), stream_max_retries 1.",
+    provider: "local", model: "llama3.1:8b", store: { "ai.local.baseUrl": "http://127.0.0.1:11434/v1" },
+  },
+  "11-local-resume": {
+    why: "Local AI, resumed thread.",
+    provider: "local", model: "llama3.1:8b", store: { "ai.local.baseUrl": "http://127.0.0.1:11434/v1" }, sessionHandle: `local/cx/local:${THREAD}`,
+  },
+  "12-openai-default-model-unknown-effort": {
+    why: "The model \"default\" and an effort Codex does not take: neither --model nor model_reasoning_effort is sent.",
+    provider: "openai", model: "default", effort: "extreme",
+  },
+  "13-openai-own-grant": {
+    why: "The turn layer passed no grant for Tarsee's tools: the engine makes one itself (deps.grantTurn) and the same mcp_servers.tarsee settings go on the command line.",
+    provider: "openai", model: "gpt-5.5", noGrant: true,
+  },
+  "14-refused-no-key": {
+    why: "A turn that cannot start (no OpenAI key in Settings and no OPENAI_API_KEY in the server's environment): the program is never started. What the engine yields instead.",
+    provider: "openai", model: "gpt-5.5", keys: {}, dropServerEnv: ["OPENAI_API_KEY"], expectNoStart: true,
+  },
+  "15-refused-no-tools-grant": {
+    why: "\"Without the MCP server\" does not exist as a turn: with no grant for Tarsee's tools the engine refuses before anything starts.",
+    provider: "openai", model: "gpt-5.5", noGrant: true, grantFails: true, expectNoStart: true,
+  },
+};
+
+// --- Running one ---------------------------------------------------------------------------------------------------
+
+function recordingCodex(log) {
+  const wrap = (thread) => {
+    const orig = thread.runStreamed.bind(thread);
+    thread.runStreamed = (input, turnOptions = {}) => {
+      log.runStreamed = { input, turnOptions: Object.fromEntries(Object.entries(turnOptions).map(([k, v]) => [k, k === "signal" ? "<AbortSignal>" : v])) };
+      return orig(input, turnOptions);
+    };
+    return thread;
+  };
+  return class RecordingCodex extends RealCodex {
+    constructor(options) { super(options); log.constructorOptions = options; }
+    startThread(o) { log.threadCall = { method: "startThread", threadOptions: o }; return wrap(super.startThread(o)); }
+    resumeThread(id, o) { log.threadCall = { method: "resumeThread", threadId: id, threadOptions: o }; return wrap(super.resumeThread(id, o)); }
+  };
+}
+
+function writePlan({ record, events, exit, stderr, sleepMs }) {
+  fs.rmSync(PLAN, { recursive: true, force: true });
+  fs.mkdirSync(PLAN, { recursive: true });
+  fs.writeFileSync(path.join(PLAN, "record.txt"), record);
+  if (events) fs.writeFileSync(path.join(PLAN, "stdout.jsonl"), events.map((e) => JSON.stringify(e)).join("\n") + "\n");
+  if (exit != null) fs.writeFileSync(path.join(PLAN, "exit.txt"), String(exit));
+  if (stderr) fs.writeFileSync(path.join(PLAN, "stderr.txt"), stderr);
+  if (sleepMs) fs.writeFileSync(path.join(PLAN, "sleep_ms.txt"), String(sleepMs));
+}
+
+/** Every spelling a path or secret can take inside the fixture's JSON: as is, with forward slashes, JSON-escaped up to three times. */
+function forms(value) {
+  const out = new Set([value, value.split("\\").join("/")]);
+  for (let i = 0; i < 3; i++) for (const f of [...out]) out.add(JSON.stringify(f).slice(1, -1));
+  return [...out];
+}
+
+function scrub(text, pairs) {
+  const all = [];
+  for (const [value, label] of pairs) if (value) for (const f of forms(String(value))) all.push([f, label]);
+  all.sort((a, b) => b[0].length - a[0].length);
+  let out = text;
+  for (const [f, label] of all) out = out.split(f).join(label);
+  return out;
+}
+
+const VALUE_NAMES = [
+  "CODEX_HOME", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "CODEX_INTERNAL_ORIGINATOR_OVERRIDE", "OPENAI_API_KEY", "OPENAI_BASE_URL",
+  "TARSEE_MCP_TOKEN", "TARSEE_PROVIDER_KEY", "TARSEE_CODEX_TURN", "SCRIPT_KEY", "MY_APP_SETTING", "NODE_ENV",
+];
+
+async function capture(name, s) {
+  const root = path.join(RUNS, name);
+  fs.rmSync(root, { recursive: true, force: true });
+  const state = path.join(root, "state");
+  const ws = path.join(root, "workspace");
+  fs.mkdirSync(state, { recursive: true });
+  fs.mkdirSync(ws, { recursive: true });
+  fs.writeFileSync(path.join(ws, "CLAUDE.md"), "Workspace rule: answer briefly.\n");
+  const recordFile = path.join(root, "stub-record.json");
+  const threadId = s.sessionHandle ? s.sessionHandle.split(":").pop() : THREAD;
+  writePlan({ record: recordFile, events: reply(threadId) });
+
+  const log = {};
+  const env = serverEnv();
+  for (const n of s.dropServerEnv || []) delete env[n];
+  const store = makeStore(s.store || {}, s.keys || KEYS);
+  const systemParts = s.systemParts || { stable: "You are Tarsee (capture run).", volatile: "Today is a capture day." };
+  const messages = [{ role: "user", content: "Please say hello." }];
+  const opts = {
+    target: { provider: s.provider, model: s.model, ...(s.effort ? { effort: s.effort } : {}) },
+    messages,
+    systemParts,
+    toolCtx: { settingsStore: store, conversationId: null },
+    ...(s.noGrant ? {} : { mcpGrant: { url: MCP_URL, token: MCP_TOKEN } }),
+    ...(s.sessionHandle ? { sessionHandle: s.sessionHandle } : {}),
+    ...(s.media ? { media: s.media } : {}),
+    ...(s.thinkingSummaries ? { thinkingSummaries: true } : {}),
+    turnId: `capture-${name}`,
+    deps: {
+      Codex: recordingCodex(log),
+      env, stateDir: state, workspace: ws, codexPath: STUB,
+      vaultEnv: async () => ({ ...VAULT }),
+      preamble: async () => "PREAMBLE (the real one is src/ai/preamble.js; shortened for the capture).",
+      accountModels: () => s.accountModels || [],
+      sweep: () => [],
+      grantTurn: async () => {
+        if (s.grantFails) throw new Error("the endpoint could not start (capture)");
+        return { url: MCP_URL, token: MCP_TOKEN, revoke() {} };
+      },
+    },
+  };
+  const events = [];
+  for await (const ev of run(opts)) events.push(ev);
+
+  let rec = null;
+  try { rec = JSON.parse(fs.readFileSync(recordFile, "utf8")); } catch { /* the program never started */ }
+  if (!!rec === !!s.expectNoStart) throw new Error(`${name}: the stub ${rec ? "ran" : "did not run"}`);
+
+  const fixture = {
+    name,
+    what: s.why,
+    made_with: {
+      engine: "src/ai/providers/codex.js run() -> providers/codex-options.js buildCodexOptions()",
+      sdk: "@openai/codex-sdk 0.167.0 (the real one), codexPathOverride = the stub",
+      platform: process.platform,
+    },
+    turn: {
+      target: opts.target,
+      messages,
+      systemParts,
+      sessionHandle: s.sessionHandle ?? null,
+      pictures: (s.media || []).map((b) => ({ media_type: b.source.media_type, base64_chars: b.source.data.length })),
+      thinkingSummaries: !!s.thinkingSummaries,
+      accountModels: s.provider === "chatgpt" ? (s.accountModels || []) : undefined,
+      settings: s.store || {},
+      mcpGrant: s.noGrant ? null : { url: MCP_URL, token: MCP_TOKEN },
+      serverEnvNames: Object.keys(env).sort(),
+      vaultEnvNames: Object.keys(VAULT),
+    },
+    sdk: rec ? {
+      "new Codex(options)": log.constructorOptions,
+      thread: log.threadCall,
+      "runStreamed(input, turnOptions)": log.runStreamed,
+    } : null,
+    child: rec ? {
+      program: STUB,
+      argv: rec.argv,
+      cwd: rec.cwd,
+      envNames: Object.keys(rec.env).sort(),
+      envValues: Object.fromEntries(VALUE_NAMES.filter((n) => n in rec.env).map((n) => [n, rec.env[n]])),
+      serverEnvNamesNotPassed: Object.keys(env).filter((n) => !(n in rec.env)).sort(),
+      serverEnvValuesReplaced: Object.keys(env).filter((n) => n in rec.env && rec.env[n] !== env[n]).sort(),
+      stdin: { text: rec.stdin.text, bytes: rec.stdin.bytes, chunks: rec.stdin.chunks.map((c) => ({ at_ms: c.at_ms, bytes: c.bytes })), eof_at_ms: rec.stdin.eof_at_ms },
+      pictureFiles: rec.argv.flatMap((a, i) => (rec.argv[i - 1] === "--image" ? [{ path: a, existsAfterTheTurn: fs.existsSync(a) }] : [])),
+    } : null,
+    stubStdout: rec ? reply(threadId).map((e) => JSON.stringify(e)) : null,
+    tarseeEvents: events,
+  };
+
+  const bridge = rec ? /http:\/\/127\.0\.0\.1:(\d+)\/t\/([^/"\\]+)\/v1/.exec(rec.argv.join("\n")) : null;
+  const pairs = [
+    [state, "<STATE_DIR>"], [ws, "<WORKSPACE>"], [STUB, "<CODEX_BIN>"], [TMP, "<TMP>"],
+    [path.join(PROJECT, "src", "skills"), "<TARSEE_SKILLS_DIR>"], [path.resolve(PROJECT), "<TARSEE_ROOT>"],
+    [process.cwd(), "<SERVER_CWD>"], [os.homedir(), "<HOME>"],
+    [KEYS.openai, "<OPENAI_KEY>"], [KEYS.openrouter, "<OPENROUTER_KEY>"], [KEYS.deepseek, "<DEEPSEEK_KEY>"], [KEYS.local, "<LOCAL_AI_OWNER_KEY>"],
+    [MCP_TOKEN, "<MCP_TOKEN>"], [VAULT.SCRIPT_KEY, "<VAULT_VALUE>"],
+    [rec?.env?.TARSEE_CODEX_TURN, "<TURN_MARK>"],
+    ...(s.provider === "local" && rec ? [[rec.env.TARSEE_PROVIDER_KEY, "<BRIDGE_TOKEN>"]] : []),
+    ...(bridge ? [[`127.0.0.1:${bridge[1]}/t/${bridge[2]}`, "127.0.0.1:<BRIDGE_PORT>/t/<BRIDGE_TURN_ID>"]] : []),
+  ];
+  let text = scrub(JSON.stringify(fixture, null, 2), pairs);
+  text = text.replace(/tarsee-images-[A-Za-z0-9]{6}/g, "tarsee-images-<RANDOM>");
+  fs.writeFileSync(path.join(OUT, `${name}.json`), text + "\n");
+  console.log(`${name}: ${rec ? `${rec.argv.length} arguments, ${rec.stdin.bytes} bytes on stdin` : "not started"}; events ${events.map((e) => e.type).join(",")}`);
+}
+
+const only = process.argv.slice(2);
+for (const [name, scenario] of Object.entries(SCENARIOS)) {
+  if (only.length && !only.some((o) => name.includes(o))) continue;
+  await capture(name, scenario);
+}
+process.exit(0);

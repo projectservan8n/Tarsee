@@ -1,0 +1,20 @@
+import { startFakeApi, startMcp } from "./fakes.mjs";
+import { drive, initialize, userText, kinds } from "./drive.mjs";
+const args = (extra = []) => [
+  "--output-format", "stream-json", "--verbose", "--input-format", "stream-json",
+  "--max-turns=50", ...extra.filter((a) => a.startsWith("--max-budget")), "--model=claude-sonnet-4-5",
+  "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*", "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+  ...extra.filter((a) => !a.startsWith("--max-budget")),
+  "--setting-sources=project", "--strict-mcp-config",
+  "--permission-mode=bypassPermissions", "--allow-dangerously-skip-permissions", "--include-partial-messages",
+];
+const mcp = await startMcp({});
+const api = await startFakeApi([{ tool: { id: "toolu_a", name: "mcp__tarsee__echo", input: { text: "1" } } }, { text: "done" }]);
+const t0 = Date.now();
+const rec = await drive("s12b-budget-tool", { args: args(["--max-budget-usd=0.0001", "--mcp-config", JSON.stringify({ mcpServers: { tarsee: { type: "http", url: mcp.url } } })]), env: { ANTHROPIC_BASE_URL: api.url }, initial: [initialize(), userText("spend")], maxMs: 30000 });
+console.log(kinds(rec));
+console.log("mcp requests:", mcp.requests.map((r) => `${r.t - t0}:${r.method} ${r.body?.method ?? ""}`).join("  "));
+console.log("api requests:", api.requests.map((r) => `${r.t - t0}:${r.method} ${r.url}`).join("  "));
+const res = rec.stdout.find((s) => s.json.type === "result").json;
+console.log(JSON.stringify({ subtype: res.subtype, errors: res.errors, num_turns: res.num_turns, total_cost_usd: res.total_cost_usd, permission_denials: res.permission_denials }), "exit", JSON.stringify(rec.exit));
+await mcp.close(); await api.close();

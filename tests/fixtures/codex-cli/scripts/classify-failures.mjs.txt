@@ -1,0 +1,62 @@
+#!/usr/bin/env node
+/**
+ * classify-failures.mjs: what Tarsee makes of each failure the captures recorded. It feeds the recorded words (a
+ * turn.failed message, or the text the SDK throws: `Codex Exec exited with code N: <stderr>`) to the Node version's
+ * own classifier (src/ai/providers/codex-events.js classifyCodexFailure, which calls ai/engine-errors.js) and writes
+ * the answers next to them, so the Rust engine's error path can be checked against the same inputs.
+ *
+ *   node classify-failures.mjs        (after capture-real.mjs and capture-sdk.mjs)
+ */
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+const PROJECT = process.env.CAPTURE_PROJECT || "/path/to/the/node/checkout";
+const SCRATCH = process.env.CAPTURE_SCRATCH || "/path/to/a/scratch/folder";
+process.env.TARSEE_STATE_DIR = path.join(SCRATCH, "tarsee-state");
+const from = (rel) => import(pathToFileURL(path.join(PROJECT, rel)).href);
+const { classifyCodexFailure } = await from("src/ai/providers/codex-events.js");
+
+const real = (name) => JSON.parse(fs.readFileSync(path.join(SCRATCH, "fixtures-real", `${name}.json`), "utf8"));
+const sdk = (name) => JSON.parse(fs.readFileSync(path.join(SCRATCH, "fixtures-sdk", `${name}.json`), "utf8"));
+const failed = (stdoutLines) => stdoutLines.map((l) => JSON.parse(l)).find((e) => e.type === "turn.failed")?.error?.message ?? null;
+
+const cases = [];
+const add = (what, provider, { turnFailed = null, sdkThrew = null, model = "the-model" }) => {
+  // The engine classifies turn.failed's message when there is one (the SDK's throw after it is ignored); otherwise
+  // what the SDK threw.
+  const words = turnFailed ?? sdkThrew;
+  const c = classifyCodexFailure(provider, words, { model });
+  cases.push({ what, provider, source: turnFailed ? "turn.failed message" : "what the SDK threw", words, tarsee: { kind: c.kind, recoverable: c.recoverable, message: c.message } });
+};
+
+const r4 = real("real-04-resume-unknown-thread");
+add("resume of a thread id that has no rollout", "openrouter", { sdkThrew: r4.whatTheSdkThrows });
+const r5 = real("real-05-missing-credentials");
+add("custom provider, env_key variable not set", "openrouter", { turnFailed: failed(r5.customProviderKeyVariableNotSet.stdoutLines), sdkThrew: r5.customProviderKeyVariableNotSet.whatTheSdkThrows });
+const r6 = real("real-06-provider-errors");
+for (const [k, label] of [["unknownModel404", "unknown model (404)"], ["unknownModel400", "unknown model (400)"], ["key401", "refused key (401)"]]) {
+  for (const provider of k === "key401" ? ["openrouter", "chatgpt"] : ["openrouter"]) add(`${label}, on ${provider}`, provider, { turnFailed: failed(r6[k].stdoutLines), sdkThrew: r6[k].whatTheSdkThrows, model: "no-such-model" });
+}
+const r7 = real("real-07-refused-arguments");
+for (const [k, v] of Object.entries(r7)) if (v?.whatTheSdkThrows) add(`refused argument: ${k}`, "openai", { sdkThrew: v.whatTheSdkThrows });
+const r8 = real("real-08-mcp-server-failures");
+add("Tarsee's MCP server: nothing listens at its address", "openai", { sdkThrew: r8.nothingListensAtTheAddress.whatTheSdkThrows });
+add("Tarsee's MCP server refuses the token (401)", "openai", { sdkThrew: r8.theServerRefusesTheToken.whatTheSdkThrows });
+add("TARSEE_MCP_TOKEN not set", "openai", { sdkThrew: r8.theTokenVariableIsNotSet.whatTheSdkThrows });
+const r11 = real("real-11-smaller-questions");
+add("nothing on stdin", "openai", { sdkThrew: r11.emptyStdin.whatTheSdkThrows });
+add("the program killed from outside (Windows: exit code 1, no stderr)", "openai", { sdkThrew: sdk("sdk-18-program-killed-from-outside").sdkThrew.message });
+add("the program killed from outside (Linux: SIGKILL)", "openai", { sdkThrew: "Codex Exec exited with signal SIGKILL: " });
+add("a stdout line that is not JSON", "openai", { sdkThrew: sdk("sdk-08-stdout-not-json").sdkThrew.message });
+add("the program is not where the path says (Windows; the path is made up here)", "openai", { sdkThrew: "spawn C:\\tarsee\\bin\\codex.exe ENOENT" });
+add("the SDK cannot find its own binary", "openai", { sdkThrew: "Unable to locate Codex CLI binaries. Ensure @openai/codex is installed with optional dependencies." });
+// From the Node repo's own captures (test/fixtures/codex/*.jsonl, real codex 0.167.0):
+add("out of credit (response.failed insufficient_quota), words from test/fixtures/codex/quota.jsonl", "openrouter", { turnFailed: "Quota exceeded. Check your plan and billing details." });
+add("busy (429 after retries), words from test/fixtures/codex/rate-limit.jsonl", "openrouter", { turnFailed: "exceeded retry limit, last status: 429 Too Many Requests" });
+add("server not reachable, words from test/fixtures/codex/unreachable.jsonl", "local", { turnFailed: "Connection failed: error sending request" });
+
+const out = { name: "real-12-how-tarsee-reads-each-failure", what: "Each failure the captures recorded, and what the Node version's classifier (providers/codex-events.js classifyCodexFailure) makes of its words: the kind, whether the turn layer retries with a fresh thread (recoverable), and the words shown.", cases };
+fs.writeFileSync(path.join(SCRATCH, "fixtures-real", "real-12-how-tarsee-reads-each-failure.json"), `${JSON.stringify(out, null, 2)}\n`);
+for (const c of cases) console.log(`${c.tarsee.kind.padEnd(12)} ${c.tarsee.recoverable ? "recoverable" : "           "} ${c.what}`);
+process.exit(0);

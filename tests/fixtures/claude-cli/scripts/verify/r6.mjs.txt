@@ -1,0 +1,67 @@
+// The Anthropic key's approval, the picture a message carries, the system prompt given on the command line, and what
+// the program answers to a control request it does not know.
+import fs from "node:fs";
+import path from "node:path";
+import { startFakeApi } from "./fakes.mjs";
+import { drive, initialize, userText, kinds } from "./drive.mjs";
+import { SCRATCH, cleanEnv } from "./realenv.mjs";
+
+const only = process.argv.slice(2);
+const want = (n) => !only.length || only.includes(n);
+const args = (extra = []) => [
+  "--output-format", "stream-json", "--verbose", "--input-format", "stream-json",
+  "--max-turns=50", "--model=claude-sonnet-4-5",
+  "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*", "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+  "--setting-sources=project", "--strict-mcp-config",
+  "--permission-mode=bypassPermissions", "--allow-dangerously-skip-permissions", "--include-partial-messages", ...extra,
+];
+const KEY = "<ANTHROPIC_KEY>";
+
+if (want("s22")) {
+  for (const [name, { approve, hostManaged }] of [["no approval, not host-managed", {}], ["no approval, host-managed", { hostManaged: true }], ["approved, host-managed", { approve: true, hostManaged: true }], ["rejected, host-managed", { approve: "rejected", hostManaged: true }]]) {
+    const home = path.join(SCRATCH, "real", `home-key-${name.replace(/[^a-z]+/g, "-")}`);
+    fs.rmSync(home, { recursive: true, force: true }); fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+    if (approve) fs.writeFileSync(path.join(home, ".claude", ".claude.json"), JSON.stringify({ customApiKeyResponses: approve === "rejected" ? { approved: [], rejected: [KEY.slice(-20)] } : { approved: [KEY.slice(-20)], rejected: [] } }, null, 2));
+    const api = await startFakeApi([{ text: "x" }]);
+    const env = cleanEnv({ HOME: home, USERPROFILE: home, CLAUDE_CONFIG_DIR: path.join(home, ".claude"), ANTHROPIC_BASE_URL: api.url, ANTHROPIC_API_KEY: KEY, ...(hostManaged ? { CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1" } : {}) });
+    delete env.ANTHROPIC_AUTH_TOKEN;
+    const rec = await drive(`s22-${name.replace(/[^a-z]+/g, "-")}`, { args: args(), rawEnv: env, initial: [initialize(), userText("hi")] });
+    const init = rec.stdout.find((s) => s.json.subtype === "init")?.json;
+    const res = rec.stdout.find((s) => s.json.type === "result")?.json;
+    const call = api.requests.find((r) => r.body?.stream);
+    console.log(`s22 ${name}: apiKeySource=${JSON.stringify(init?.apiKeySource)} result=${res?.subtype}/${res?.is_error}/${JSON.stringify(res?.result)} x-api-key sent=${call ? (call.headers["x-api-key"] === KEY) : "no call"} authorization=${call?.headers.authorization ?? "none"} exit=${rec.exit?.code}`);
+    const cfg = path.join(home, ".claude", ".claude.json");
+    console.log("   .claude.json after:", fs.existsSync(cfg) ? JSON.stringify(JSON.parse(fs.readFileSync(cfg, "utf8")).customApiKeyResponses ?? null) : "absent");
+    await api.close();
+  }
+}
+if (want("s20")) {
+  console.log("\n=== s20 a picture in the user message (no session_id key)");
+  const api = await startFakeApi([{ text: "a pixel" }]);
+  const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+  const rec = await drive("s20-picture", { args: args(), env: { ANTHROPIC_BASE_URL: api.url }, initial: [initialize(), { type: "user", message: { role: "user", content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: png } }, { type: "text", text: "what is this?" }] }, parent_tool_use_id: null }] });
+  console.log("stdout:", kinds(rec), "| exit:", JSON.stringify(rec.exit));
+  const last = api.requests.find((r) => r.body?.stream)?.body.messages.at(-1);
+  console.log("last user content sent to the API:", JSON.stringify(last.content.map((b) => (b.type === "image" ? { type: "image", source: { ...b.source, data: `<${b.source.data.length} chars${b.source.data === png ? ", the same bytes" : ", changed"}>` } } : { ...b, text: b.text.length > 200 ? b.text.slice(0, 60) + "…" : b.text }))).split(SCRATCH.split("/").join("\\\\")).join("<SCRATCH>"));
+  await api.close();
+}
+if (want("s21")) {
+  console.log("\n=== s21 the system prompt on the command line, no initialize");
+  const api = await startFakeApi([{ text: "ok" }]);
+  const rec = await drive("s21-system-prompt-flag", { args: args(["--system-prompt", "PROMPT FROM THE FLAG", "--system-prompt-snapshot", "off"]), env: { ANTHROPIC_BASE_URL: api.url }, initial: [userText("hi")] });
+  console.log("stdout:", kinds(rec), "| exit:", JSON.stringify(rec.exit), "| stderr:", JSON.stringify(rec.stderr));
+  console.log("system:", JSON.stringify(api.requests.find((r) => r.body?.stream)?.body.system.map((b) => b.text.slice(0, 70))));
+  await api.close();
+}
+if (want("s19")) {
+  console.log("\n=== s19 a control request the program does not know, and one with no subtype");
+  const api = await startFakeApi([{ text: "ok" }]);
+  const seen = [];
+  const rec = await drive("s19-unknown-control-request", {
+    args: args(), env: { ANTHROPIC_BASE_URL: api.url }, initial: [initialize(), { request_id: "bad1", type: "control_request", request: { subtype: "no_such_subtype" } }, { request_id: "bad2", type: "control_request", request: { subtype: "set_model" } }, userText("hi")],
+    onMessage: (m) => { if (m.type === "control_response") seen.push(JSON.stringify(m).slice(0, 400)); },
+  });
+  console.log("stdout:", kinds(rec), "| exit:", JSON.stringify(rec.exit), "| stderr:", JSON.stringify(rec.stderr.slice(0, 300)));
+  console.log(seen.slice(1).join("\n"));
+  await api.close();
+}

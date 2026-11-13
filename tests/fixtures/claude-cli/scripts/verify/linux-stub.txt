@@ -1,0 +1,30 @@
+#!/usr/bin/env node
+// Linux stand-in for `claude` (CommonJS, no extension, so the SDK starts it as a native binary).
+const fs = require("fs");
+const t0 = Date.now();
+const out = process.env.VSTUB_OUT;
+const scenario = process.env.VSTUB_SCENARIO || "ignore-term";
+const rec = (o) => fs.appendFileSync(out, JSON.stringify({ t: Date.now() - t0, at: Date.now(), ...o }) + "\n");
+rec({ ev: "start", argv: process.argv.slice(2), envNames: Object.keys(process.env).sort(), pid: process.pid });
+process.on("SIGTERM", () => { rec({ ev: "SIGTERM received" }); if (scenario === "exit-on-term") process.exit(0); });
+process.on("SIGINT", () => rec({ ev: "SIGINT received" }));
+process.on("SIGHUP", () => rec({ ev: "SIGHUP received" }));
+const w = (o) => process.stdout.write(JSON.stringify(o) + "\n");
+let buf = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (d) => {
+  buf += d; let i;
+  while ((i = buf.indexOf("\n")) >= 0) {
+    const line = buf.slice(0, i); buf = buf.slice(i + 1);
+    let m; try { m = JSON.parse(line); } catch { continue; }
+    rec({ ev: "stdin", type: m.type, subtype: m.request && m.request.subtype });
+    if (m.type === "control_request") w({ type: "control_response", response: { subtype: "success", request_id: m.request_id, response: {} } });
+    if (m.type === "user") {
+      w({ type: "system", subtype: "init", session_id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", apiKeySource: "none", mcp_servers: [], tools: [], uuid: "u1" });
+      w({ type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "partial" } }, session_id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", parent_tool_use_id: null, uuid: "u2" });
+    }
+  }
+});
+process.stdin.on("end", () => { rec({ ev: "stdin closed" }); if (scenario === "exit-on-stdin-close") process.exit(0); });
+setInterval(() => {}, 1000);
+setTimeout(() => { rec({ ev: "lifetime cap" }); process.exit(0); }, 15000);

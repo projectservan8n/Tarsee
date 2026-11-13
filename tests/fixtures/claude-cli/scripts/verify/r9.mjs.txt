@@ -1,0 +1,26 @@
+import fs from "node:fs";
+import path from "node:path";
+import { startFakeApi, startMcp } from "./fakes.mjs";
+import { drive, initialize, userText, kinds } from "./drive.mjs";
+import { SCRATCH, HOME } from "./realenv.mjs";
+const args = (extra = []) => ["--output-format", "stream-json", "--verbose", "--input-format", "stream-json", "--max-turns=50", "--model=claude-sonnet-4-5", "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*", "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*", ...extra, "--setting-sources=project", "--strict-mcp-config", "--permission-mode=bypassPermissions", "--allow-dangerously-skip-permissions", "--include-partial-messages"];
+{
+  const proj = path.join(HOME, ".claude", "projects");
+  const cwd = path.join(SCRATCH, "real", "ws2", "emoji \u{1F600} dir");
+  const api = await startFakeApi([{ text: "ok" }]);
+  const rec = await drive("s30-emoji-cwd", { args: args(), cwd, env: { ANTHROPIC_BASE_URL: api.url }, initial: [initialize(), userText("hi")] });
+  const sid = rec.stdout.find((s) => s.json.type === "result")?.json.session_id;
+  const mine = fs.readdirSync(proj).filter((d) => fs.existsSync(path.join(proj, d, `${sid}.jsonl`)));
+  console.log("emoji cwd tail: 'emoji <U+1F600> dir' -> folder tail:", JSON.stringify(mine[0]?.slice(-16)), "(one astral character became", (mine[0]?.match(/emoji-(-+)-dir$/)?.[1].length), "dashes)");
+  await api.close();
+}
+{
+  const mcp = await startMcp({ token: "<TOKEN>" });
+  const api = await startFakeApi([{ tool: { id: "toolu_f", name: "mcp__tarsee__echo", input: { text: "from a file" } } }, { text: "done" }]);
+  const file = path.join(SCRATCH, "real", "tmp", "mcp-config-verify.json");
+  fs.writeFileSync(file, JSON.stringify({ mcpServers: { tarsee: { type: "http", url: mcp.url, headers: { Authorization: "Bearer <TOKEN>" }, alwaysLoad: true } } }));
+  let deleted = false;
+  const rec = await drive("m9-config-from-a-file", { args: args(["--mcp-config", file.split("/").join("\\")]), env: { ANTHROPIC_BASE_URL: api.url }, initial: [initialize(), userText("use it")], onMessage: (m, ctl) => { if (!deleted && m.type === "system" && m.subtype === "init") { deleted = true; fs.rmSync(file); ctl.note("config file deleted at system/init"); } } });
+  console.log("config from a file:", JSON.stringify(rec.stdout.find((s) => s.json.subtype === "init")?.json.mcp_servers), "| tool calls after the file was deleted:", mcp.requests.filter((r) => r.body?.method === "tools/call").length, "| exit", rec.exit?.code, "| notes", JSON.stringify(rec.notes));
+  await mcp.close(); await api.close();
+}

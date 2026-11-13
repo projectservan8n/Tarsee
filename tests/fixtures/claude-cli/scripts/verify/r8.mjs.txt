@@ -1,0 +1,12 @@
+import { startFakeApi } from "./fakes.mjs";
+import { drive, initialize, userText } from "./drive.mjs";
+const args = (model) => ["--output-format", "stream-json", "--verbose", "--input-format", "stream-json", "--max-turns=50", `--model=${model}`, "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*", "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*", "--setting-sources=project", "--strict-mcp-config", "--permission-mode=bypassPermissions", "--allow-dangerously-skip-permissions", "--include-partial-messages"];
+for (const [name, env] of [["neither", {}], ["host-managed", { CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1" }], ["entrypoint sdk-ts", { CLAUDE_CODE_ENTRYPOINT: "sdk-ts" }], ["both", { CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1", CLAUDE_CODE_ENTRYPOINT: "sdk-ts" }]]) {
+  for (const [status, error, model] of [[404, { type: "not_found_error", message: "model: no-such-model" }, "no-such-model"], [401, { type: "authentication_error", message: "invalid x-api-key" }, "claude-sonnet-4-5"], [403, { type: "permission_error", message: "no permission" }, "claude-sonnet-4-5"], [402, { type: "billing_error", message: "Insufficient Balance" }, "claude-sonnet-4-5"], [500, { type: "api_error", message: "Internal server error" }, "claude-sonnet-4-5"]]) {
+    const api = await startFakeApi([{ status, error }]);
+    const rec = await drive(`s31-${status}-${name.replace(/ /g, "-")}`, { args: args(model), env: { ANTHROPIC_BASE_URL: api.url, ...env }, initial: [initialize(), userText("hi")] });
+    const res = rec.stdout.find((s) => s.json.type === "result")?.json; const a = rec.stdout.find((s) => s.json.type === "assistant")?.json;
+    console.log(`${String(status)} ${name.padEnd(18)} error=${a?.error} status=${res?.api_error_status} exit=${rec.exit?.code} words=${JSON.stringify(res?.result)}`);
+    await api.close();
+  }
+}

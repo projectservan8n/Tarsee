@@ -1,0 +1,39 @@
+import fs from "node:fs";
+import path from "node:path";
+import { startFakeApi } from "./fakes.mjs";
+import { drive, initialize, userText, kinds } from "./drive.mjs";
+import { SCRATCH, HOME } from "./realenv.mjs";
+
+const api = await startFakeApi([{ text: "Hello from the verify fake.", chunks: 3 }]);
+const addDir = path.join(SCRATCH, "real", "adddir"); fs.mkdirSync(addDir, { recursive: true });
+const win = (p) => p.split("/").join("\\");
+// the document's first list (the Claude plan, new session), argument for argument
+const args = [
+  "--output-format", "stream-json", "--verbose", "--input-format", "stream-json",
+  "--max-turns=50", "--model=claude-sonnet-4-5",
+  "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*", "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+  "--setting-sources=user,project,local",
+  "--permission-mode=bypassPermissions", "--allow-dangerously-skip-permissions",
+  "--fallback-model=claude-haiku-4-5", "--include-partial-messages", `--add-dir=${win(addDir)}`,
+];
+const rec = await drive("r1-plain-no-sdk-env", { args, env: { ANTHROPIC_BASE_URL: api.url }, initial: [initialize(), userText("say hi")] });
+console.log(kinds(rec));
+console.log("stderr:", JSON.stringify(rec.stderr), "exit:", JSON.stringify(rec.exit), "non-json:", rec.non_json_stdout.length);
+console.log("stdin:", rec.stdin_written.map((s) => s.t + ":" + (s.closed ? "CLOSED" : s.json.type)).join(" "));
+const init = rec.stdout.find((s) => s.json.subtype === "init")?.json;
+console.log("init keys:", Object.keys(init || {}).join(","));
+console.log("init:", JSON.stringify({ ...init, slash_commands: `[${init?.slash_commands?.length}]`, skills: `[${init?.skills?.length}]`, agents: `[${init?.agents?.length}]` }));
+const result = rec.stdout.find((s) => s.json.type === "result")?.json;
+console.log("result:", JSON.stringify(result));
+const cr = rec.stdout.find((s) => s.json.type === "control_response")?.json;
+console.log("control_response keys:", Object.keys(cr.response), "inner:", Object.keys(cr.response.response).join(","));
+console.log("api requests:\n  " + api.requests.map((r) => `${r.method} ${r.url} model=${r.body?.model} stream=${r.body?.stream} tools=${r.body?.tools?.length} ua=${r.headers["user-agent"]} auth=${r.headers.authorization ? "bearer" : r.headers["x-api-key"] ? "x-api-key" : "none"}`).join("\n  "));
+const first = api.requests.find((r) => r.body?.stream);
+console.log("system blocks:", JSON.stringify(first?.body?.system?.map((b) => ({ ...b, text: b.text.slice(0, 120) }))));
+console.log("tools offered:", first?.body?.tools?.map((t) => t.name).join(","));
+console.log("last user:", JSON.stringify(first?.body?.messages?.at(-1)).slice(0, 600));
+await api.close();
+const proj = path.join(HOME, ".claude", "projects");
+const walk = (d, depth = 0) => (fs.existsSync(d) ? fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() && depth < 3 ? [path.join(d, e.name) + path.sep, ...walk(path.join(d, e.name), depth + 1)] : [path.join(d, e.name)])) : []);
+console.log("projects:\n  " + walk(proj).map((p) => p.split("\\").join("/").replace(SCRATCH, "<SCRATCH>")).join("\n  "));
+console.log("config dir:", fs.readdirSync(path.join(HOME, ".claude")).join(", "), "| home:", fs.readdirSync(HOME).join(", "));

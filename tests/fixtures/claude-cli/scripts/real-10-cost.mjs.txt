@@ -1,0 +1,10 @@
+// Real CLI, driven directly: a provider's own cost figure on message_delta.usage (OpenRouter's usage.cost) comes
+// through on the stream_event unchanged.
+import fs from "node:fs";
+import { drive, gatewayEnv, baseArgs, initRequest, userText, startFakeAnthropic, SCRATCH } from "./real-drive.mjs";
+const fake = await startFakeAnthropic({ script: () => ({ text: "Hello.", cost: 0.00123, usage: { input_tokens: 40, output_tokens: 9, cache_read_input_tokens: 100, cache_creation_input_tokens: 20 } }) });
+try {
+  const r = await drive({ name: "10-usage-cost", args: baseArgs({ model: "~anthropic/claude-sonnet-latest" }), env: gatewayEnv(`${SCRATCH}/homes/cost`, fake.url, { CLAUDE_CODE_SDK_READS_SESSION_STATE: "1" }), cwd: `${SCRATCH}/ws/cost`, stdin: [initRequest({ systemPrompt: ["You are a test."], systemPromptSnapshot: false }), userText("hi")] });
+  for (const o of r.stdout) { const m = o.msg; if (m?.type === "stream_event" && (m.event.type === "message_delta" || m.event.type === "message_start")) console.log(JSON.stringify(m.event)); if (m?.type === "result") console.log("result usage:", JSON.stringify(m.usage), "total_cost_usd:", m.total_cost_usd, "modelUsage:", JSON.stringify(m.modelUsage)); }
+  console.log("exit", r.exitCode, "stderr", JSON.stringify(r.stderr));
+} finally { await fake.close(); }

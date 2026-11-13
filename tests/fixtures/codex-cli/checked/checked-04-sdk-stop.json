@@ -1,0 +1,261 @@
+{
+ "name": "checked-04-sdk-stop",
+ "what": "Stopping through the SDK, on Windows and on Linux: the caller's signal fired in the middle of a turn, fired before the turn was started, fired while a burst of lines was being read; the caller walking away from the stream; a line that is not JSON. Node itself was watched (ChildProcess.prototype.spawn), so 'was a process started' does not depend on the stub leaving a record.",
+ "made_with": {
+  "sdk": "@openai/codex-sdk 0.167.0, called directly",
+  "stub": "scripts/checked-stub-exec.js.txt, run by node itself as the program",
+  "script": "scripts/checked-capture.mjs.txt",
+  "platform": "win32, Node 22.18",
+  "linux": "scripts/checked-posix.mjs.txt under WSL2, Node 22.22"
+ },
+ "whatNodeWasAskedToStart": {
+  "aProcessIdWasGiven": true,
+  "argumentCount": 3,
+  "windowsHide": false,
+  "detached": false,
+  "cwd": null,
+  "stdio": [
+   "pipe",
+   "pipe",
+   "pipe"
+  ]
+ },
+ "abortMidTurn": {
+  "yielded": [
+   {
+    "atMs": 59,
+    "type": "thread.started"
+   },
+   {
+    "atMs": 59,
+    "type": "turn.started"
+   },
+   {
+    "atMs": 173,
+    "type": "item.started"
+   }
+  ],
+  "threw": {
+   "name": "AbortError",
+   "message": "The operation was aborted",
+   "code": "ABORT_ERR",
+   "cause": {
+    "name": "AbortError",
+    "message": "This operation was aborted"
+   }
+  },
+  "timing": {
+   "abortAtMs": 482,
+   "stubAliveAtAbort": "425",
+   "endedAtMs": 486
+  },
+  "stubLastAliveMs": "425",
+  "stubStillRunningAfterwards": false,
+  "note": "the stub's own child is not reported here: the stub is a Node process, and on Windows Node ends what it started when it ends (checked-07), which says nothing about the SDK"
+ },
+ "signalAlreadyAborted": {
+  "windows": {
+   "aProcessWasStarted": true,
+   "theStubGotAsFarAsWritingItsRecord": false,
+   "threw": {
+    "name": "AbortError",
+    "message": "The operation was aborted",
+    "code": "ABORT_ERR",
+    "cause": {
+     "name": "AbortError",
+     "message": "This operation was aborted"
+    }
+   },
+   "endedAtMs": 5,
+   "yielded": []
+  },
+  "linux": {
+   "aProcessWasStarted": true,
+   "theStubGotAsFarAsWritingItsRecord": false,
+   "signalsTheStubReceived": null,
+   "threw": {
+    "name": "AbortError",
+    "message": "The operation was aborted",
+    "code": "ABORT_ERR"
+   },
+   "timing": {
+    "endedAtMs": 3
+   },
+   "stubStillRunning": null
+  }
+ },
+ "callerStopsReading": {
+  "yielded": [
+   "thread.started"
+  ],
+  "threw": null,
+  "stubStillRunningAfterwards": false,
+  "stubLastAliveMs": "2"
+ },
+ "abortDuringABurst": {
+  "given": "the stub wrote one line, then 200 lines in one write 200 ms later; the signal fired as the second line was handed over",
+  "yieldedCount": 201,
+  "lastYielded": {
+   "atMs": 314,
+   "event": {
+    "type": "n",
+    "i": 199
+   }
+  },
+  "threw": {
+   "name": "AbortError",
+   "message": "The operation was aborted",
+   "code": "ABORT_ERR",
+   "cause": {
+    "name": "AbortError",
+    "message": "This operation was aborted"
+   }
+  },
+  "timing": {
+   "abortAtMs": 328,
+   "stubAliveAtAbort": "220",
+   "endedAtMs": 332
+  },
+  "stub": {
+   "lastAliveMs": "220",
+   "stillRunningAfterwards": false
+  }
+ },
+ "linux": {
+  "envOption": {
+   "childEnvNames": [
+    "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+    "ONLY",
+    "PATH"
+   ],
+   "threw": null
+  },
+  "noEnvOption": {
+   "childLacks": [],
+   "childHasExtra": [
+    "CODEX_INTERNAL_ORIGINATOR_OVERRIDE"
+   ],
+   "processGroup": {
+    "stub": {
+     "ppid": 384,
+     "pgrp": 384,
+     "session": 384
+    },
+    "caller": {
+     "pid": 384,
+     "pgrp": 384,
+     "session": 384
+    }
+   },
+   "detached": false
+  },
+  "abort": {
+   "signalsTheStubReceived": [
+    {
+     "sig": "SIGTERM",
+     "atMs": 322
+    }
+   ],
+   "yielded": [
+    "thread.started",
+    "turn.started"
+   ],
+   "threw": {
+    "name": "AbortError",
+    "message": "The operation was aborted",
+    "code": "ABORT_ERR"
+   },
+   "timing": {
+    "abortAtMs": 370,
+    "endedAtMs": 376
+   },
+   "stubStillRunning": false,
+   "theStubsOwnChild": {
+    "pid": 544,
+    "stillRunningAfterwards": true
+   },
+   "sameProcessGroupAsCaller": true
+  },
+  "abortIgnored": {
+   "signalsTheStubReceived": [
+    {
+     "sig": "SIGTERM",
+     "atMs": 321
+    }
+   ],
+   "threw": {
+    "name": "AbortError",
+    "message": "The operation was aborted",
+    "code": "ABORT_ERR"
+   },
+   "timing": {
+    "abortAtMs": 377,
+    "endedAtMs": 4083
+   },
+   "stubExitedAtMs": 4022
+  },
+  "callerStopsReading": {
+   "signalsTheStubReceived": [
+    {
+     "sig": "SIGTERM",
+     "atMs": 10
+    }
+   ],
+   "threw": null,
+   "timing": {
+    "stoppedReadingAtMs": 38,
+    "endedAtMs": 38
+   },
+   "stubStillRunning": false
+  },
+  "killedFromOutside_SIGKILL": {
+   "yielded": [
+    "thread.started",
+    "turn.started"
+   ],
+   "threw": {
+    "name": "Error",
+    "message": "Codex Exec exited with signal SIGKILL: ",
+    "code": null
+   }
+  },
+  "killedFromOutside_SIGTERM_stubExits143": {
+   "yielded": [
+    "thread.started",
+    "turn.started"
+   ],
+   "threw": {
+    "name": "Error",
+    "message": "Codex Exec exited with code 143: ",
+    "code": null
+   },
+   "signalsTheStubReceived": [
+    {
+     "sig": "SIGTERM",
+     "atMs": 218
+    }
+   ]
+  },
+  "badLine": {
+   "yielded": [
+    "a"
+   ],
+   "threw": {
+    "name": "Error",
+    "message": "Failed to parse item: not json",
+    "code": null
+   },
+   "signalsTheStubReceived": [
+    {
+     "sig": "SIGTERM",
+     "atMs": 15
+    }
+   ],
+   "stubStillRunning": false
+  },
+  "platform": {
+   "node": "v22.22.2",
+   "kernel": "Linux 6.6.87.2-microsoft-standard-WSL2"
+  }
+ }
+}

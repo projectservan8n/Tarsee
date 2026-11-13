@@ -1,0 +1,212 @@
+// A stand-in for the `claude` program, started by the Agent SDK in place of the real one (through stub-claude.exe, a
+// small native launcher, so the SDK takes its native-binary path). It records what it was started with and everything
+// it is sent, and plays back a scripted stdout so the SDK goes through a whole turn.
+//
+// What it records (stub-config.json next to this file names the output file and the scenario):
+//   argv    the arguments, in order
+//   cwd     the working folder
+//   env     every environment name and value it was given
+//   stdin   every line received, with a millisecond offset from the stub's start, parsed as JSON when it is JSON
+//   events  stdin closing, the stub's own exit
+// The record is rewritten after every event, so a kill loses nothing.
+//
+// Scenarios (what it writes to stdout). The messages are copies of what the real claude 2.1.319 wrote in the same
+// situation (captured against a loopback fake of the Messages API), cut down to the fields that matter:
+//   turn        answers initialize; on the user message writes system/init, a streamed text reply, assistant, result
+//   tool        the same, with a Bash tool call and its result before the text
+//   mcp-call    the same, and before the reply asks the SDK's in-process "tarsee" server to run tarsee_datetime
+//   hang        answers initialize, starts streaming, then never finishes and ignores stdin closing (to time the kill)
+//   hang-exit   the same, but exits when stdin closes (as the real program does)
+//   max-turns   ends with result/error_max_turns
+//   budget      ends with result/error_max_budget_usd
+//   exit-1      writes a line to stderr and exits with code 1 before any message
+//   exit-0      writes a line to stderr and exits with code 0 before any message
+//   half        writes system/init and part of an answer, then exits with code 0 and no result
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const cfg = JSON.parse(fs.readFileSync(path.join(here, "stub-config.json"), "utf8"));
+const t0 = Date.now();
+const t = () => Date.now() - t0;
+const argv = process.argv.slice(2);
+const rec = { scenario: cfg.scenario, argv, cwd: process.cwd(), env: { ...process.env }, stdin: [], events: [], stdout: [] };
+const save = () => fs.writeFileSync(cfg.record, JSON.stringify(rec, null, 2));
+save();
+
+const arg = (name) => { const a = argv.find((x) => x.startsWith(`--${name}=`)); return a ? a.slice(name.length + 3) : null; };
+const SESSION = arg("resume") || "11111111-2222-4333-8444-555555555555";
+const MODEL = arg("model") || "claude-sonnet-4-5";
+const apiKeySource = process.env.ANTHROPIC_API_KEY ? "ANTHROPIC_API_KEY" : "none";
+let n = 0;
+const uuid = () => `00000000-0000-4000-8000-${String(++n).padStart(12, "0")}`;
+
+function out(obj) {
+  rec.stdout.push({ t: t(), json: obj });
+  process.stdout.write(JSON.stringify(obj) + "\n");
+  save();
+}
+const ev = (event, extra = {}) => out({ type: "stream_event", event, session_id: SESSION, parent_tool_use_id: null, uuid: uuid(), ...extra });
+
+function init() {
+  out({
+    type: "system", subtype: "init", cwd: process.cwd(), session_id: SESSION,
+    tools: ["Bash", "Edit", "Glob", "Grep", "Read", "Write"],
+    mcp_servers: argv.some((a) => a.includes("mcpServers")) || cfg.sdkServers ? [{ name: "tarsee", status: "connected" }] : [],
+    model: MODEL, permissionMode: arg("permission-mode") || "default", slash_commands: [], apiKeySource,
+    claude_code_version: "2.1.319", output_style: "default", agents: [], skills: [], plugins: [], uuid: uuid(),
+  });
+}
+
+function streamText(id, text, usage = { input_tokens: 12, output_tokens: 6, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }) {
+  ev({ type: "message_start", message: { id, type: "message", role: "assistant", model: MODEL, content: [], stop_reason: null, stop_sequence: null, usage: { ...usage, output_tokens: 1 } } }, { ttft_ms: 70, api_message_id: id });
+  ev({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
+  const half = Math.ceil(text.length / 2);
+  ev({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: text.slice(0, half) } });
+  ev({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: text.slice(half) } });
+  out({ type: "assistant", message: { id, type: "message", role: "assistant", model: MODEL, content: [{ type: "text", text }], stop_reason: null, stop_sequence: null, usage: { ...usage, output_tokens: 1 } }, parent_tool_use_id: null, session_id: SESSION, uuid: uuid() });
+  ev({ type: "content_block_stop", index: 0 });
+  ev({ type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: usage.output_tokens } });
+  ev({ type: "message_stop" });
+}
+
+function toolCall(id) {
+  const tu = { type: "tool_use", id: "toolu_stub_1", name: "Bash", input: { command: "echo hi", description: "say hi" } };
+  ev({ type: "message_start", message: { id, type: "message", role: "assistant", model: MODEL, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } });
+  ev({ type: "content_block_start", index: 0, content_block: { ...tu, input: {} } });
+  ev({ type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify(tu.input) } });
+  out({ type: "assistant", message: { id, type: "message", role: "assistant", model: MODEL, content: [tu], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 1 } }, parent_tool_use_id: null, session_id: SESSION, uuid: uuid() });
+  ev({ type: "content_block_stop", index: 0 });
+  ev({ type: "message_delta", delta: { stop_reason: "tool_use", stop_sequence: null }, usage: { output_tokens: 20 } });
+  ev({ type: "message_stop" });
+  out({ type: "user", message: { role: "user", content: [{ tool_use_id: tu.id, type: "tool_result", content: "hi", is_error: false }] }, parent_tool_use_id: null, session_id: SESSION, uuid: uuid(), tool_use_result: { stdout: "hi", stderr: "", interrupted: false, isImage: false } });
+}
+
+function result(extra = {}) {
+  rec.events.push({ t: t(), event: "result written" });
+  out({
+    type: "result", subtype: "success", is_error: false, duration_ms: 300, duration_api_ms: 120, num_turns: 1, result: "Hello from the stub.",
+    stop_reason: "end_turn", session_id: SESSION, total_cost_usd: 0.000126,
+    usage: { input_tokens: 12, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 6 },
+    modelUsage: { [MODEL]: { inputTokens: 12, outputTokens: 6, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 0.000126, contextWindow: 200000, maxOutputTokens: 32000 } },
+    permission_denials: [], terminal_reason: "completed", uuid: uuid(), ...extra,
+  });
+}
+
+const waiting = new Map(); // request_id of a control_request the stub sent -> resolve
+function ask(request) {
+  const request_id = `stub-req-${waiting.size + 1}-${n}`;
+  return new Promise((resolve) => {
+    waiting.set(request_id, resolve);
+    out({ type: "control_request", request_id, request });
+  });
+}
+
+let replying = false;
+async function onUser() {
+  const s = cfg.scenario;
+  try { await reply(s); } finally { replying = false; }
+}
+async function reply(s) {
+  init();
+  if (s === "hang" || s === "hang-exit") {
+    ev({ type: "message_start", message: { id: "msg_stub_1", type: "message", role: "assistant", model: MODEL, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 12, output_tokens: 1 } } });
+    ev({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
+    ev({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "This answer will never finish because" } });
+    return; // and hang
+  }
+  if (s === "half") {
+    ev({ type: "message_start", message: { id: "msg_stub_1", type: "message", role: "assistant", model: MODEL, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 12, output_tokens: 1 } } });
+    ev({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
+    ev({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Half an ans" } });
+    rec.events.push({ t: t(), event: "exit", code: 0 });
+    save();
+    process.exit(0);
+  }
+  if (s === "mcp-call") {
+    const reply = await ask({ subtype: "mcp_message", server_name: "tarsee", message: { jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "tarsee_datetime", arguments: { timezone: "UTC", format: "iso" } } } });
+    rec.events.push({ t: t(), event: "mcp tools/call answered", ok: reply?.subtype === "success" });
+  }
+  if (s === "tool") toolCall("msg_stub_0");
+  if (s === "max-turns") {
+    toolCall("msg_stub_0");
+    result({ subtype: "error_max_turns", is_error: true, result: undefined, errors: ["Reached maximum number of turns (1)"], terminal_reason: "max_turns", stop_reason: "tool_use" });
+    return;
+  }
+  if (s === "budget") {
+    streamText("msg_stub_1", "Hello from the stub.");
+    result({ subtype: "error_max_budget_usd", is_error: true, result: undefined, errors: ["Reached maximum budget ($0.0001)"], terminal_reason: "max_budget" });
+    return;
+  }
+  streamText("msg_stub_1", "Hello from the stub.");
+  result();
+}
+
+if (cfg.scenario === "exit-1") {
+  process.stderr.write("stub: a made-up startup failure on stderr\n");
+  rec.events.push({ t: t(), event: "exit", code: 1 });
+  save();
+  process.exit(1);
+}
+
+if (cfg.scenario === "exit-0") {
+  process.stderr.write("stub: a made-up note on stderr\n");
+  rec.events.push({ t: t(), event: "exit", code: 0 });
+  save();
+  process.exit(0);
+}
+
+let buf = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (d) => {
+  buf += d;
+  let i;
+  while ((i = buf.indexOf("\n")) !== -1) {
+    const raw = buf.slice(0, i); buf = buf.slice(i + 1);
+    if (!raw.trim()) continue;
+    let msg = null;
+    try { msg = JSON.parse(raw); } catch { /* not JSON: kept as text */ }
+    rec.stdin.push({ t: t(), bytes: Buffer.byteLength(raw) + 1, ...(msg ? { json: msg } : { text: raw }) });
+    save();
+    if (!msg) continue;
+    if (msg.type === "control_request" && msg.request?.subtype === "initialize") {
+      out({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: {
+        commands: [], agents: [], output_style: "default", available_output_styles: ["default"], models: [],
+        account: { tokenSource: process.env.ANTHROPIC_AUTH_TOKEN ? "ANTHROPIC_AUTH_TOKEN" : "none", apiProvider: "firstParty" },
+        pid: process.pid, claude_code_version: "2.1.319", current_permission_mode: arg("permission-mode") || "default",
+        hook_on_failure_supported: true, session_state: "idle", capabilities: [],
+      }, pending_permission_requests: [], pending_user_dialog_requests: [] } });
+    } else if (msg.type === "control_request" && msg.request?.subtype === "interrupt") {
+      out({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: { still_queued: [] } } });
+    } else if (msg.type === "control_request") {
+      out({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: {} } });
+    } else if (msg.type === "control_response") {
+      const done = waiting.get(msg.response?.request_id);
+      if (done) { waiting.delete(msg.response.request_id); done(msg.response); }
+    } else if (msg.type === "user") {
+      // a short pause before the reply, so the record shows whether stdin was closed before or after the result
+      rec.events.push({ t: t(), event: "user message read" });
+      replying = cfg.scenario !== "hang-exit";
+      setTimeout(() => onUser().catch((e) => { rec.events.push({ t: t(), event: `stub error: ${e?.stack || e}` }); save(); }), cfg.replyDelayMs ?? 150);
+    }
+  }
+});
+process.stdin.on("end", () => {
+  rec.events.push({ t: t(), event: "stdin closed" });
+  save();
+  if (cfg.scenario === "hang") return; // stay alive: the SDK must kill it
+  // like the real program: finish the turn in progress, then exit
+  const finish = () => {
+    if (replying) { setTimeout(finish, 20); return; }
+    rec.events.push({ t: t(), event: "exit", code: 0 });
+    save();
+    process.exit(0);
+  };
+  finish();
+});
+// keep the process alive in the "hang" scenario after stdin ends
+if (cfg.scenario === "hang") {
+  setInterval(() => { rec.events.push({ t: t(), event: "still alive" }); save(); }, 1000);
+  setTimeout(() => process.exit(3), 20000); // never outlive a capture
+}

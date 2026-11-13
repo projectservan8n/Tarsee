@@ -1,0 +1,76 @@
+{
+  "name": "posix-07-caller-stops-reading",
+  "what": "The caller stops reading the events early (breaks out of the loop, as Tarsee's engine does at its turn limit): the SDK sends the program SIGTERM.",
+  "made_with": {
+    "sdk": "@openai/codex-sdk 0.167.0, called directly",
+    "platform": "linux (WSL)",
+    "node": "v22.22.2"
+  },
+  "sdk": {
+    "new Codex(options)": {
+      "env": {
+        "PATH": "/usr/bin:/bin"
+      },
+      "codexPathOverride": "<CODEX_BIN>"
+    },
+    "callerProcessEnvNames": [
+      "FROM_PROCESS_ENV",
+      "PATH",
+      "TARSEE_STATE_DIR"
+    ]
+  },
+  "child": {
+    "argv": [
+      "exec",
+      "--experimental-json"
+    ],
+    "cwd": "<CALLER_CWD>",
+    "envNames": [
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+      "PATH"
+    ],
+    "envValues": {
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE": "codex_sdk_ts",
+      "PATH": "/usr/bin:/bin"
+    },
+    "processGroup": {
+      "sameGroupAsTheCaller": true,
+      "sameSessionAsTheCaller": true,
+      "isItsOwnGroupLeader": false
+    },
+    "stdin": {
+      "chunks": [
+        {
+          "at_ms": 6,
+          "bytes": 5
+        }
+      ],
+      "eof_at_ms": 6,
+      "bytes": 5,
+      "text": "hello"
+    }
+  },
+  "stub": {
+    "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"01a1c000-0000-7000-8000-0000000000cc\"}\n{\"type\":\"turn.started\"}\n",
+    "stderr": "",
+    "exitCode": 0,
+    "staysAliveMs": 30000,
+    "ignoresSignals": false
+  },
+  "sdkYielded": [
+    "thread.started",
+    "turn.started"
+  ],
+  "sdkThrew": null,
+  "timing": {
+    "stoppedReadingAt_ms": 49,
+    "iterationEndedAt_ms": 49
+  },
+  "signalsTheStubReceived": [
+    {
+      "stubClock_ms": 16,
+      "signal": "SIGTERM"
+    }
+  ],
+  "stubStillRunningAfterwards": false
+}

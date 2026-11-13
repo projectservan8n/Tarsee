@@ -1,0 +1,24 @@
+// Real CLI, driven directly: what the two markers the SDK adds to the environment change in what the program sends
+// to the Messages API (the User-Agent header and the first system block).
+import fs from "node:fs";
+import { drive, gatewayEnv, baseArgs, initRequest, userText, startFakeAnthropic, SCRATCH } from "./real-drive.mjs";
+
+const fake = await startFakeAnthropic({ script: () => ({ text: "ok" }) });
+const out = [];
+try {
+  for (const [label, extra] of [
+    ["CLAUDE_CODE_ENTRYPOINT not set", { CLAUDE_CODE_ENTRYPOINT: undefined }],
+    ["CLAUDE_CODE_ENTRYPOINT=sdk-ts", {}],
+    ["CLAUDE_CODE_ENTRYPOINT=sdk-ts and CLAUDE_AGENT_SDK_VERSION=0.3.319", { CLAUDE_AGENT_SDK_VERSION: "0.3.319" }],
+  ]) {
+    fake.requests.length = 0;
+    const env = gatewayEnv(`${SCRATCH}/homes/entry`, fake.url, extra);
+    for (const k of Object.keys(env)) if (env[k] === undefined) delete env[k];
+    const r = await drive({ args: baseArgs(), env, cwd: `${SCRATCH}/ws/entry`, stdin: [initRequest({ systemPrompt: ["You are a test."], systemPromptSnapshot: false }), userText("hi")] });
+    const q = fake.messages()[0];
+    const row = { environment: label, exit_code: r.exitCode, user_agent_header: q?.headers["user-agent"], x_app_header: q?.headers["x-app"], first_system_block: q?.body?.system?.[0]?.text };
+    out.push(row);
+    console.log(JSON.stringify(row));
+  }
+  fs.writeFileSync(`${SCRATCH}/real/09-entrypoint-markers.json`, JSON.stringify(out, null, 2));
+} finally { await fake.close(); }

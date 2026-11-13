@@ -1,0 +1,161 @@
+{
+ "name": "checked-05-sdk-stdin",
+ "what": "What reaches the program's stdin, byte for byte, and what happens when the program does not read it: a long prompt with characters of every width, prompts that are empty or made of empty parts, a lone surrogate, and a program that exits before reading a prompt bigger than the pipe (the caller's process had a handler for errors nobody catches, which is how the second error was seen). The Linux half also has an argument past the system's limit.",
+ "made_with": {
+  "sdk": "@openai/codex-sdk 0.167.0, called directly",
+  "stub": "scripts/checked-stub-exec.js.txt, run by node itself as the program",
+  "script": "scripts/checked-capture.mjs.txt",
+  "platform": "win32, Node 22.18",
+  "linux": "scripts/checked-posix.mjs.txt under WSL2, Node 22.22"
+ },
+ "longUnicodePrompt": {
+  "promptChars": 80050,
+  "promptUtf8Bytes": 180050,
+  "promptSha256": "ff22467636bd4b14ee9d53feb1c8e144fdd8fe5ffe01203754272d226cbb2cfd",
+  "stdinBytes": 180050,
+  "stdinSha256": "ff22467636bd4b14ee9d53feb1c8e144fdd8fe5ffe01203754272d226cbb2cfd",
+  "same": true,
+  "chunks": 3,
+  "threw": null
+ },
+ "oddPrompts": {
+  "emptyString": {
+   "args": [
+    "exec",
+    "--experimental-json"
+   ],
+   "stdinBytes": 0,
+   "stdinBase64": "",
+   "eofAtMs": 8,
+   "threw": null
+  },
+  "onlyPictures": {
+   "args": [
+    "exec",
+    "--experimental-json",
+    "--image",
+    "x.png"
+   ],
+   "stdinBytes": 0,
+   "stdinBase64": "",
+   "eofAtMs": 8,
+   "threw": null
+  },
+  "twoEmptyTexts": {
+   "args": [
+    "exec",
+    "--experimental-json",
+    "--image",
+    "x.png"
+   ],
+   "stdinBytes": 2,
+   "stdinBase64": "Cgo=",
+   "eofAtMs": 5,
+   "threw": null
+  },
+  "loneSurrogate": {
+   "args": [
+    "exec",
+    "--experimental-json"
+   ],
+   "stdinBytes": 5,
+   "stdinBase64": "Ye+/vWI=",
+   "eofAtMs": 15,
+   "threw": null
+  }
+ },
+ "programExitsBeforeReadingItsPrompt": {
+  "small_5_bytes": {
+   "yielded": [],
+   "threw": {
+    "name": "Error",
+    "message": "Codex Exec exited with code 2: error: unexpected argument '--bogus' found\n",
+    "code": null,
+    "cause": null
+   },
+   "uncaughtInTheCallersProcess": [],
+   "stubExitedAtMs": 11
+  },
+  "big_2MB": {
+   "yielded": [],
+   "threw": {
+    "name": "Error",
+    "message": "Codex Exec exited with code 2: error: unexpected argument '--bogus' found\n",
+    "code": null,
+    "cause": null
+   },
+   "uncaughtInTheCallersProcess": [
+    {
+     "name": "Error",
+     "message": "write EOF",
+     "code": "EOF",
+     "syscall": "write"
+    }
+   ],
+   "stubExitedAtMs": 6
+  }
+ },
+ "linux": {
+  "programExitsBeforeReadingA2MBPrompt": {
+   "threw": {
+    "name": "Error",
+    "message": "Codex Exec exited with code 2: error: unexpected argument\n",
+    "code": null
+   },
+   "uncaughtInTheCallersProcess": [
+    {
+     "name": "Error",
+     "message": "write EPIPE",
+     "code": "EPIPE",
+     "syscall": "write"
+    }
+   ]
+  },
+  "instructionsAtTheLinuxCap": {
+   "plainAscii": {
+    "capBytes": 98304,
+    "instructionsBytesAfterCap": 98304,
+    "argumentBytes": 98331,
+    "started": true,
+    "threw": null,
+    "argArrivedBytes": 98331
+   },
+   "everyThirdCharacterAQuote": {
+    "capBytes": 98304,
+    "instructionsBytesAfterCap": 98304,
+    "argumentBytes": 131080,
+    "started": false,
+    "threw": {
+     "name": "Error",
+     "message": "spawn E2BIG",
+     "code": "E2BIG"
+    },
+    "argArrivedBytes": null
+   },
+   "allQuotes": {
+    "capBytes": 98304,
+    "instructionsBytesAfterCap": 98304,
+    "argumentBytes": 196580,
+    "started": false,
+    "threw": {
+     "name": "Error",
+     "message": "spawn E2BIG",
+     "code": "E2BIG"
+    },
+    "argArrivedBytes": null
+   },
+   "manyNewlines": {
+    "capBytes": 98304,
+    "instructionsBytesAfterCap": 98299,
+    "argumentBytes": 117974,
+    "started": true,
+    "threw": null,
+    "argArrivedBytes": 117974
+   }
+  },
+  "platform": {
+   "node": "v22.22.2",
+   "kernel": "Linux 6.6.87.2-microsoft-standard-WSL2"
+  }
+ }
+}

@@ -1,0 +1,1658 @@
+{
+ "name": "checked-06-real-program",
+ "what": "The real codex 0.167.0, started with a turn's argument list (a custom Responses provider, Tarsee's six MCP pairs), against a logging MCP server and a scripted stand-in for the Responses API written for this check, both on 127.0.0.1. No account, no key, no model: every other address went to a proxy that is not there. Also the program's own help for every option the document names, and the invocations outside a turn that need no sign-in.",
+ "made_with": {
+  "program": "codex 0.167.0 (@openai/codex-win32-x64, the pinned binary)",
+  "script": "scripts/checked-real.mjs.txt",
+  "platform": "win32",
+  "network": "HTTPS_PROXY, HTTP_PROXY and ALL_PROXY set to http://127.0.0.1:9, NO_PROXY=127.0.0.1,localhost; a Codex home of its own for each scenario"
+ },
+ "help": {
+  "exec": "Run Codex non-interactively\n\nUsage: codex exec [OPTIONS] [PROMPT]\n       codex exec [OPTIONS] <COMMAND> [ARGS]\n\nCommands:\n  resume  Resume a previous session by id or pick the most recent with --last\n  fork    Fork a previous session by id into a new session\n  review  Run a code review against the current repository\n  help    Print this message or the help of the given subcommand(s)\n\nArguments:\n  [PROMPT]\n          Initial instructions for the agent. If not provided as an argument (or if `-` is used),\n          instructions are read from stdin. If stdin is piped and a prompt is also provided, stdin\n          is appended as a `<stdin>` block\n\nOptions:\n  -c, --config <key=value>\n          Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`.\n          Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed\n          as TOML. If it fails to parse as TOML, the raw string is used as a literal.\n          \n          Examples: - `-c model=\"o3\"` - `-c 'sandbox_permissions=[\"disk-full-read-access\"]'` - `-c\n          shell_environment_policy.inherit=all`\n\n      --enable <FEATURE>\n          Enable a feature (repeatable). Equivalent to `-c features.<name>=true`\n\n      --disable <FEATURE>\n          Disable a feature (repeatable). Equivalent to `-c features.<name>=false`\n\n      --strict-config\n          Error out when config.toml contains fields that are not recognized by this version of\n          Codex\n\n  -i, --image <FILE>...\n          Optional image(s) to attach to the initial prompt\n\n  -m, --model <MODEL>\n          Model the agent should use\n\n      --oss\n          Use open-source provider\n\n      --local-provider <OSS_PROVIDER>\n          Specify which local provider to use (lmstudio or ollama). If not specified with --oss,\n          will use config default or show selection\n\n  -p, --profile <CONFIG_PROFILE_V2>\n          Layer $CODEX_HOME/<name>.config.toml on top of the base user config\n\n  -s, --sandbox <SANDBOX_MODE>\n          Select the sandbox policy to use when executing model-generated shell commands\n          \n          [possible values: read-only, workspace-write, danger-full-access]\n\n      --approve-for-me\n          Route approval requests through automatic review using the workspace-write sandbox\n\n      --dangerously-bypass-approvals-and-sandbox\n          Skip all confirmation prompts and execute commands without sandboxing. EXTREMELY\n          DANGEROUS. Intended solely for running in environments that are externally sandboxed\n\n      --dangerously-bypass-hook-trust\n          Run enabled hooks without requiring persisted hook trust for this invocation. DANGEROUS.\n          Intended only for automation that already vets hook sources\n\n  -C, --cd <DIR>\n          Tell the agent to use the specified directory as its working root\n\n      --worktree\n          Run the session in a new managed Git worktree\n\n      --add-dir <DIR>\n          Additional directories that should be writable alongside the primary workspace\n\n      --thread-source <SOURCE>\n          Source classification for newly created or forked threads\n\n      --cyber-access-program <PROGRAM>\n          Request an experimental Cyber access program for this turn (OpenAI provider only). Omit to\n          use server defaults. Not supported with review; fork requires a prompt\n          \n          [possible values: standard, daybreak_blue, daybreak_red]\n\n      --skip-git-repo-check\n          Allow running Codex outside a Git repository\n\n      --ephemeral\n          Run without persisting session files to disk\n\n      --ignore-user-config\n          Do not load `$CODEX_HOME/config.toml`; auth still uses `CODEX_HOME`\n\n      --ignore-rules\n          Do not load user or project execpolicy `.rules` files\n\n      --output-schema <FILE>\n          Path to a JSON Schema file describing the model's final response shape\n\n      --color <COLOR>\n          Specifies color settings for use in the output\n          \n          [default: auto]\n          [possible values: always, never, auto]\n\n      --json\n          Print events to stdout as JSONL\n\n  -o, --output-last-message <FILE>\n          Specifies file where the last message from the agent should be written\n\n  -h, --help\n          Print help (see a summary with '-h')\n\n  -V, --version\n          Print version\n",
+  "execResume": "Resume a previous session by id or pick the most recent with --last\n\nUsage: codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]\n\nArguments:\n  [SESSION_ID]\n          Conversation/session id (UUID) or thread name. UUIDs take precedence if it parses. If\n          omitted, use --last to pick the most recent recorded session\n\n  [PROMPT]\n          Prompt to send after resuming the session. If `-` is used, read from stdin\n\nOptions:\n  -c, --config <key=value>\n          Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`.\n          Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed\n          as TOML. If it fails to parse as TOML, the raw string is used as a literal.\n          \n          Examples: - `-c model=\"o3\"` - `-c 'sandbox_permissions=[\"disk-full-read-access\"]'` - `-c\n          shell_environment_policy.inherit=all`\n\n      --last\n          Resume the most recent recorded session (newest) without specifying an id\n\n      --all\n          Show all sessions (disables cwd filtering)\n\n      --enable <FEATURE>\n          Enable a feature (repeatable). Equivalent to `-c features.<name>=true`\n\n      --disable <FEATURE>\n          Disable a feature (repeatable). Equivalent to `-c features.<name>=false`\n\n  -i, --image <FILE>\n          Optional image(s) to attach to the prompt sent after resuming\n\n      --strict-config\n          Error out when config.toml contains fields that are not recognized by this version of\n          Codex\n\n  -m, --model <MODEL>\n          Model the agent should use\n\n      --dangerously-bypass-approvals-and-sandbox\n          Skip all confirmation prompts and execute commands without sandboxing. EXTREMELY\n          DANGEROUS. Intended solely for running in environments that are externally sandboxed\n\n      --dangerously-bypass-hook-trust\n          Run enabled hooks without requiring persisted hook trust for this invocation. DANGEROUS.\n          Intended only for automation that already vets hook sources\n\n      --worktree\n          Run the session in a new managed Git worktree\n\n      --thread-source <SOURCE>\n          Source classification for newly created or forked threads\n\n      --cyber-access-program <PROGRAM>\n          Request an experimental Cyber access program for this turn (OpenAI provider only). Omit to\n          use server defaults. Not supported with review; fork requires a prompt\n          \n          [possible values: standard, daybreak_blue, daybreak_red]\n\n      --skip-git-repo-check\n          Allow running Codex outside a Git repository\n\n      --ephemeral\n          Run without persisting session files to disk\n\n      --ignore-user-config\n          Do not load `$CODEX_HOME/config.toml`; auth still uses `CODEX_HOME`\n\n      --ignore-rules\n          Do not load user or project execpolicy `.rules` files\n\n      --output-schema <FILE>\n          Path to a JSON Schema file describing the model's final response shape\n\n      --json\n          Print events to stdout as JSONL\n\n  -o, --output-last-message <FILE>\n          Specifies file where the last message from the agent should be written\n\n  -h, --help\n          Print help (see a summary with '-h')\n",
+  "login": "Manage login\n\nUsage: codex login [OPTIONS] [COMMAND]\n\nCommands:\n  status  Show login status\n  help    Print this message or the help of the given subcommand(s)\n\nOptions:\n  -c, --config <key=value>\n          Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`.\n          Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed\n          as TOML. If it fails to parse as TOML, the raw string is used as a literal.\n          \n          Examples: - `-c model=\"o3\"` - `-c 'sandbox_permissions=[\"disk-full-read-access\"]'` - `-c\n          shell_environment_policy.inherit=all`\n\n      --with-api-key\n          Read the API key from stdin (e.g. `printenv OPENAI_API_KEY | codex login --with-api-key`)\n\n      --enable <FEATURE>\n          Enable a feature (repeatable). Equivalent to `-c features.<name>=true`\n\n      --with-access-token\n          Read the access token from stdin (e.g. `printenv CODEX_ACCESS_TOKEN | codex login\n          --with-access-token`)\n\n      --disable <FEATURE>\n          Disable a feature (repeatable). Equivalent to `-c features.<name>=false`\n\n      --device-auth\n          \n\n  -h, --help\n          Print help (see a summary with '-h')\n",
+  "mcp": "Manage external MCP servers for Codex\n\nUsage: codex mcp [OPTIONS] <COMMAND>\n\nCommands:\n  list    \n  get     \n  add     \n  remove  \n  login   \n  logout  \n  help    Print this message or the help of the given subcommand(s)\n\nOptions:\n  -c, --config <key=value>\n          Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`.\n          Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed\n          as TOML. If it fails to parse as TOML, the raw string is used as a literal.\n          \n          Examples: - `-c model=\"o3\"` - `-c 'sandbox_permissions=[\"disk-full-read-access\"]'` - `-c\n          shell_environment_policy.inherit=all`\n\n      --enable <FEATURE>\n          Enable a feature (repeatable). Equivalent to `-c features.<name>=true`\n\n      --disable <FEATURE>\n          Disable a feature (repeatable). Equivalent to `-c features.<name>=false`\n\n  -h, --help\n          Print help (see a summary with '-h')\n",
+  "mcpList": "Usage: codex mcp list [OPTIONS]\n\nOptions:\n  -c, --config <key=value>\n          Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`.\n          Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed\n          as TOML. If it fails to parse as TOML, the raw string is used as a literal.\n          \n          Examples: - `-c model=\"o3\"` - `-c 'sandbox_permissions=[\"disk-full-read-access\"]'` - `-c\n          shell_environment_policy.inherit=all`\n\n      --json\n          Output the configured servers as JSON\n\n      --enable <FEATURE>\n          Enable a feature (repeatable). Equivalent to `-c features.<name>=true`\n\n      --disable <FEATURE>\n          Disable a feature (repeatable). Equivalent to `-c features.<name>=false`\n\n  -h, --help\n          Print help (see a summary with '-h')\n",
+  "mcpGet": "Usage: codex mcp get [OPTIONS] <NAME>\n\nArguments:\n  <NAME>\n          Name of the MCP server to display\n\nOptions:\n  -c, --config <key=value>\n          Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`.\n          Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed\n          as TOML. If it fails to parse as TOML, the raw string is used as a literal.\n          \n          Examples: - `-c model=\"o3\"` - `-c 'sandbox_permissions=[\"disk-full-read-access\"]'` - `-c\n          shell_environment_policy.inherit=all`\n\n      --json\n          Output the server configuration as JSON\n\n      --enable <FEATURE>\n          Enable a feature (repeatable). Equivalent to `-c features.<name>=true`\n\n      --disable <FEATURE>\n          Disable a feature (repeatable). Equivalent to `-c features.<name>=false`\n\n  -h, --help\n          Print help (see a summary with '-h')\n",
+  "archive": "Archive a saved session by id or session name\n\nUsage: codex archive [OPTIONS] <SESSION>\n\nArguments:\n  <SESSION>\n          Session id (UUID) or session name. UUIDs take precedence if it parses\n",
+  "rootCommands": "Codex CLI\n\nIf no subcommand is specified, options will be forwarded to the interactive CLI.\n\nUsage: codex [OPTIONS] [PROMPT]\n       codex [OPTIONS] <COMMAND> [ARGS]\n\nCommands:\n  agents            Open the agent command center to browse and switch sessions\n  exec              Run Codex non-interactively [aliases: e]\n  review            Run a code review non-interactively\n  login             Manage login\n  logout            Remove stored authentication credentials\n  mcp               Manage external MCP servers for Codex\n  plugin            Manage Codex plugins\n  app-server        [experimental] Run the app server or related tooling\n  remote-control    [experimental] Manage the app-server daemon with remote control enabled\n  app               Launch the Desktop app (opens the app installer if missing)\n  completion        Generate shell completion scripts\n  update            Update Codex to the latest version\n  doctor            Diagnose local Codex installation, config, auth, and runtime health\n  sandbox           Run commands within a Codex-provided sandbox\n  debug             Debugging tools\n  apply             Apply the latest diff produced by Codex agent as a `git apply` to your local\n                    working tree [aliases: a]\n  resume            Resume a previous interactive session (picker by default; use --last to continue\n                    the most recent)\n  queue             Queue a message for an existing session\n  archive           Archive a saved session by id or session name\n  delete            Permanently delete a saved session by id or session name\n  migrate-rollouts  Inspect or migrate legacy local sessions to paginated thread history\n  migrate-nfs-db    [experimental] Migrate configured SQLite databases to DELETE mode in place\n  unarchive         Unarchive a saved session by id or session name\n  fork              Fork a previous interactive session (picker by default; use --last to fork the\n                    most recent)\n  cloud             [EXPERIMENTAL] Browse tasks from Codex Cloud and apply changes locally"
+ },
+ "stringsInTheProgram": {
+  "note": "looked for in the binary's bytes",
+  "version": "codex-cli 0.167.0",
+  "archived_sessions": true,
+  "experimental_issuer": true,
+  "device auth timed out after 15 minutes": true,
+  "https://auth.openai.com/oauth/revoke": true,
+  "CODEX_INTERNAL_ORIGINATOR_OVERRIDE": true
+ },
+ "newThread": {
+  "args": [
+   "exec",
+   "--experimental-json",
+   "--config",
+   "developer_instructions=\"You are a check run.\"",
+   "--config",
+   "project_doc_max_bytes=0",
+   "--config",
+   "project_root_markers=[]",
+   "--config",
+   "history.persistence=\"none\"",
+   "--config",
+   "cli_auth_credentials_store=\"file\"",
+   "--config",
+   "check_for_update_on_startup=false",
+   "--config",
+   "model_reasoning_summary=\"none\"",
+   "--config",
+   "tool_output_token_limit=3000",
+   "--config",
+   "shell_environment_policy.inherit=\"all\"",
+   "--config",
+   "shell_environment_policy.ignore_default_excludes=true",
+   "--config",
+   "shell_environment_policy.filters.CODEX_API_KEY=\"exclude\"",
+   "--config",
+   "shell_environment_policy.filters.CODEX_ACCESS_TOKEN=\"exclude\"",
+   "--config",
+   "shell_environment_policy.filters.TARSEE_MCP_TOKEN=\"exclude\"",
+   "--config",
+   "shell_environment_policy.filters.TARSEE_PROVIDER_KEY=\"exclude\"",
+   "--config",
+   "shell_environment_policy.filters.TARSEE_CHATGPT_ACCESS_TOKEN=\"exclude\"",
+   "--config",
+   "mcp_servers.tarsee.url=\"http://127.0.0.1:<PORT>/mcp\"",
+   "--config",
+   "mcp_servers.tarsee.bearer_token_env_var=\"TARSEE_MCP_TOKEN\"",
+   "--config",
+   "mcp_servers.tarsee.default_tools_approval_mode=\"approve\"",
+   "--config",
+   "mcp_servers.tarsee.required=true",
+   "--config",
+   "mcp_servers.tarsee.startup_timeout_sec=20",
+   "--config",
+   "mcp_servers.tarsee.tool_timeout_sec=300",
+   "--config",
+   "features.apps=false",
+   "--config",
+   "features.plugins=false",
+   "--config",
+   "features.remote_plugin=false",
+   "--config",
+   "features.plugin_discovery_prefetch=false",
+   "--config",
+   "features.multi_agent=false",
+   "--config",
+   "features.goals=false",
+   "--config",
+   "features.computer_use=false",
+   "--config",
+   "features.browser_use=false",
+   "--config",
+   "features.browser_use_external=false",
+   "--config",
+   "features.in_app_browser=false",
+   "--config",
+   "features.image_generation=false",
+   "--config",
+   "features.tool_suggest=false",
+   "--config",
+   "features.skill_mcp_dependency_install=false",
+   "--config",
+   "features.memories=false",
+   "--config",
+   "features.hooks=false",
+   "--config",
+   "features.unbounded_connection_retries=false",
+   "--config",
+   "model_auto_compact_token_limit=108800",
+   "--config",
+   "model_provider=\"tarsee_check\"",
+   "--config",
+   "model_providers.tarsee_check.name=\"Check\"",
+   "--config",
+   "model_providers.tarsee_check.base_url=\"http://127.0.0.1:<PORT>/v1\"",
+   "--config",
+   "model_providers.tarsee_check.env_key=\"TARSEE_PROVIDER_KEY\"",
+   "--config",
+   "model_providers.tarsee_check.wire_api=\"responses\"",
+   "--config",
+   "forced_login_method=\"api\"",
+   "--config",
+   "model_context_window=128000",
+   "--model",
+   "test-model",
+   "--sandbox",
+   "danger-full-access",
+   "--cd",
+   "<SCRATCH>\\ws",
+   "--skip-git-repo-check",
+   "--config",
+   "model_reasoning_effort=\"medium\"",
+   "--config",
+   "sandbox_workspace_write.network_access=true",
+   "--config",
+   "web_search=\"disabled\"",
+   "--config",
+   "approval_policy=\"never\""
+  ],
+  "exit": {
+   "code": 0,
+   "signal": null,
+   "ms": 12932
+  },
+  "stdoutEndsWithNewline": true,
+  "stdoutHasCarriageReturns": false,
+  "stdoutLines": [
+   "{\"type\":\"thread.started\",\"thread_id\":\"01a1d275-9d89-7c51-80e0-4e432dd7021d\"}",
+   "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Model metadata for `test-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.\"}}",
+   "{\"type\":\"turn.started\"}",
+   "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"reasoning\",\"text\":\"Thinking about hello.\"}}",
+   "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_2\",\"type\":\"agent_message\",\"text\":\"Hello there.\"}}",
+   "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1200,\"cached_input_tokens\":200,\"cache_write_input_tokens\":0,\"output_tokens\":30,\"reasoning_output_tokens\":12}}"
+  ],
+  "stderr": "Reading prompt from stdin...\n",
+  "order": {
+   "mcpFirstRequestAtMs": 9765,
+   "mcpThirdRequestAtMs": 9832,
+   "firstStdoutAtMs": 10021
+  },
+  "mcp": [
+   {
+    "method": "POST",
+    "url": "/mcp",
+    "httpVersion": "1.1",
+    "headersInOrder": [
+     "user-agent: codex-mcp-client/0.167.0",
+     "accept: text/event-stream, application/json",
+     "content-type: application/json",
+     "authorization: Bearer mcp-check-token",
+     "host: 127.0.0.1:<PORT>",
+     "content-length: 217"
+    ],
+    "remotePort": 58689,
+    "body": {
+     "jsonrpc": "2.0",
+     "id": 0,
+     "method": "initialize",
+     "params": {
+      "protocolVersion": "2025-06-18",
+      "capabilities": {
+       "elicitation": {
+        "form": {},
+        "url": {}
+       }
+      },
+      "clientInfo": {
+       "name": "codex-mcp-client",
+       "title": "Codex",
+       "version": "0.167.0"
+      }
+     }
+    },
+    "answerStatus": 200
+   },
+   {
+    "method": "POST",
+    "url": "/mcp",
+    "httpVersion": "1.1",
+    "headersInOrder": [
+     "user-agent: codex-mcp-client/0.167.0",
+     "mcp-protocol-version: 2025-06-18",
+     "accept: text/event-stream, application/json",
+     "content-type: application/json",
+     "authorization: Bearer mcp-check-token",
+     "host: 127.0.0.1:<PORT>",
+     "content-length: 54"
+    ],
+    "remotePort": 58689,
+    "body": {
+     "jsonrpc": "2.0",
+     "method": "notifications/initialized"
+    },
+    "answerStatus": 202
+   },
+   {
+    "method": "POST",
+    "url": "/mcp",
+    "httpVersion": "1.1",
+    "headersInOrder": [
+     "user-agent: codex-mcp-client/0.167.0",
+     "mcp-protocol-version: 2025-06-18",
+     "accept: text/event-stream, application/json",
+     "content-type: application/json",
+     "authorization: Bearer mcp-check-token",
+     "host: 127.0.0.1:<PORT>",
+     "content-length: 85"
+    ],
+    "remotePort": 58689,
+    "body": {
+     "jsonrpc": "2.0",
+     "id": 1,
+     "method": "tools/list",
+     "params": {
+      "_meta": {
+       "progressToken": 0
+      }
+     }
+    },
+    "answerStatus": 200
+   }
+  ],
+  "mcpDistinctConnections": 1,
+  "requestToTheModel": {
+   "method": "POST",
+   "url": "/v1/responses",
+   "headers": {
+    "x-codex-beta-features": "remote_compaction_v2",
+    "x-codex-window-id": "01a1d275-9d89-7c51-80e0-4e432dd7021d:0",
+    "x-codex-turn-metadata": "{\"installation_id\":\"<INSTALLATION_ID>\",\"session_id\":\"01a1d275-9d89-7c51-80e0-4e432dd7021d\",\"thread_id\":\"01a1d275-9d89-7c51-80e0-4e432dd7021d\",\"agent_name\":\"/root\",\"turn_id\":\"01a1d275-a2b7-75e0-be87-fe27aabc8ba5\",\"window_id\":\"01a1d275-9d89-7c51-80e0-4e432dd7021d:0\",\"window_number\":0,\"context_window_id\":\"01a1d275-9dde-78f3-a8e6-18e169080a9c\",\"request_kind\":\"turn\",\"history_initialization\":\"new\",\"root_turn_id\":\"01a1d275-a2b7-75e0-be87-fe27aabc8ba5\",\"thread_source\":\"user\",\"turn_trigger\":\"exec\",\"sandbox\":\"none\",\"sandbox_mode\":\"danger-full-access\",\"auto_review_enabled\":false,\"node_repl_auto_review_required\":false,\"node_repl_disabled\":false,\"turn_started_at_unix_ms\":1794532287252,\"analytics_enabled\":true,\"model\":\"test-model\",\"reasoning_effort\":\"medium\"}",
+    "x-client-request-id": "01a1d275-9d89-7c51-80e0-4e432dd7021d",
+    "session-id": "01a1d275-9d89-7c51-80e0-4e432dd7021d",
+    "thread-id": "01a1d275-9d89-7c51-80e0-4e432dd7021d",
+    "accept": "text/event-stream",
+    "content-type": "application/json",
+    "authorization": "Bearer sk-check-not-a-key",
+    "originator": "codex_sdk_ts",
+    "user-agent": "codex_sdk_ts/0.167.0 (<SYSTEM>) unknown (codex_exec; 0.167.0)",
+    "host": "127.0.0.1:<PORT>",
+    "content-length": "36896"
+   },
+   "model": "test-model",
+   "stream": true,
+   "instructionsStart": "",
+   "inputItems": [
+    {
+     "type": "message",
+     "role": "developer",
+     "content": [
+      {
+       "type": "input_text",
+       "text": "You are a coding agent running in the Codex CLI, a terminal-based coding assistant. Codex CLI is an open source project led by OpenAI. You are expected to be precise, safe, and helpful.\r\n\r\nYour capabilities:\r\n\r\n- Receive user prompts and other context provided by the harness, such as files in the wo…"
+      }
+     ]
+    },
+    {
+     "type": "message",
+     "role": "developer",
+     "content": [
+      {
+       "type": "input_text",
+       "text": "You are a check run."
+      },
+      {
+       "type": "input_text",
+       "text": "<skills_instructions>\n## Skills\nA skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list of skills that can be used. Each entry includes a name, description, and a short path that can be expanded into an absolute path using the skill roots table.\n### Sk…"
+      },
+      {
+       "type": "input_text",
+       "text": "<permissions instructions>\nFilesystem sandboxing defines which files can be read or written. `sandbox_mode` is `danger-full-access`: No filesystem sandboxing - all commands are permitted. Network access is enabled.\nApproval policy is currently never. Do not provide the `sandbox_permissions` for any …"
+      }
+     ]
+    },
+    {
+     "type": "message",
+     "role": "user",
+     "content": [
+      {
+       "type": "input_text",
+       "text": "<environment_context>\n  <cwd><SCRATCH>\\ws</cwd>\n  <shell>powershell</shell>\n  <current_date>2026-11-13</current_date>\n  <timezone><TIMEZONE></timezone>\n  <filesystem><workspace_roots><root><SCRATCH>\\ws</root></workspace_roots><permission_profi…"
+      }
+     ]
+    },
+    {
+     "type": "message",
+     "role": "user",
+     "content": [
+      {
+       "type": "input_text",
+       "text": "<turn-context>\nToday.\n</turn-context>\n\nSay hello. é☃😀"
+      }
+     ]
+    }
+   ],
+   "tools": [
+    {
+     "type": "function",
+     "name": "exec_command"
+    },
+    {
+     "type": "function",
+     "name": "write_stdin"
+    },
+    {
+     "type": "function",
+     "name": "list_mcp_resources"
+    },
+    {
+     "type": "function",
+     "name": "list_mcp_resource_templates"
+    },
+    {
+     "type": "function",
+     "name": "read_mcp_resource"
+    },
+    {
+     "type": "function",
+     "name": "request_user_input"
+    },
+    {
+     "type": "function",
+     "name": "view_image"
+    },
+    {
+     "type": "namespace",
+     "name": "mcp__tarsee",
+     "sub": [
+      "tarsee_datetime",
+      "tarsee_slow"
+     ]
+    }
+   ],
+   "reasoning": {
+    "effort": "medium"
+   },
+   "bodyKeys": [
+    "model",
+    "stream",
+    "input",
+    "tools",
+    "tool_choice",
+    "parallel_tool_calls",
+    "reasoning",
+    "store",
+    "include",
+    "prompt_cache_key",
+    "client_metadata"
+   ]
+  },
+  "homeAfter": [
+   ".sandbox/",
+   ".sandbox/sandbox.2026-11-13.log",
+   ".sandbox_migration",
+   "goals_1.sqlite",
+   "installation_id",
+   "logs_2.sqlite",
+   "memories_1.sqlite",
+   "queue_1.sqlite",
+   "sessions/",
+   "sessions/2026/",
+   "sessions/2026/11/",
+   "sessions/2026/11/13/",
+   "sessions/2026/11/13/rollout-2026-11-13T09-11-25-01a1d275-9d89-7c51-80e0-4e432dd7021d.jsonl",
+   "skills/",
+   "skills/.system/",
+   "state_5.sqlite",
+   "thread-writer-locks/",
+   "thread-writer-locks/.coordination.lock",
+   "thread_history_1.sqlite",
+   "thread_history_1.sqlite-shm",
+   "thread_history_1.sqlite-wal",
+   "tmp/",
+   "tmp/arg0-windows/"
+  ],
+  "rollout": {
+   "file": "sessions/2026/11/13/rollout-2026-11-13T09-11-25-01a1d275-9d89-7c51-80e0-4e432dd7021d.jsonl",
+   "lineMembers": [
+    "timestamp",
+    "ordinal",
+    "type",
+    "payload"
+   ],
+   "lineTypes": [
+    "session_meta",
+    "event_msg:task_started",
+    "response_item:message",
+    "response_item:message",
+    "world_state",
+    "turn_context",
+    "event_msg:thread_settings_applied",
+    "response_item:message",
+    "event_msg:item_completed",
+    "event_msg:item_completed",
+    "response_item:reasoning",
+    "event_msg:item_completed",
+    "response_item:message",
+    "token_usage_record",
+    "event_msg:token_count",
+    "event_msg:task_complete"
+   ],
+   "sessionMeta": {
+    "type": "session_meta",
+    "id": "01a1d275-9d89-7c51-80e0-4e432dd7021d",
+    "originator": "codex_sdk_ts",
+    "source": "exec",
+    "cwd": "<SCRATCH>\\ws",
+    "cli_version": "0.167.0"
+   },
+   "tokenCountLines": [
+    {
+     "timestamp": "2026-11-13T01:11:28.289Z",
+     "ordinal": 14,
+     "type": "event_msg",
+     "payload": {
+      "type": "token_count",
+      "info": {
+       "total_token_usage": {
+        "input_tokens": 1200,
+        "cached_input_tokens": 200,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 30,
+        "reasoning_output_tokens": 12,
+        "total_tokens": 1230
+       },
+       "last_token_usage": {
+        "input_tokens": 1200,
+        "cached_input_tokens": 200,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 30,
+        "reasoning_output_tokens": 12,
+        "total_tokens": 1230
+       },
+       "last_usage_includes_reasoning": false,
+       "model_context_window": 121600
+      },
+      "rate_limits": {
+       "limit_id": "codex",
+       "limit_name": null,
+       "primary": null,
+       "secondary": null,
+       "credits": null,
+       "individual_limit": null,
+       "spend_control_reached": null,
+       "plan_type": null,
+       "rate_limit_reached_type": null
+      }
+     }
+    }
+   ],
+   "note": "the folder and the name are in the machine's local time, eight hours ahead of the UTC timestamps inside"
+  }
+ },
+ "resumedWithPicture": {
+  "args": [
+   "--config",
+   "model_reasoning_effort=\"medium\"",
+   "--config",
+   "sandbox_workspace_write.network_access=true",
+   "--config",
+   "web_search=\"disabled\"",
+   "--config",
+   "approval_policy=\"never\"",
+   "resume",
+   "01a1d275-9d89-7c51-80e0-4e432dd7021d",
+   "--image",
+   "<SCRATCH>\\tmp\\one pixel.png"
+  ],
+  "exit": {
+   "code": 0,
+   "signal": null
+  },
+  "stdoutLines": [
+   "{\"type\":\"thread.started\",\"thread_id\":\"01a1d275-9d89-7c51-80e0-4e432dd7021d\"}",
+   "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Model metadata for `test-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.\"}}",
+   "{\"type\":\"turn.started\"}",
+   "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"Second answer.\"}}",
+   "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":2500,\"cached_input_tokens\":300,\"cache_write_input_tokens\":0,\"output_tokens\":70,\"reasoning_output_tokens\":17}}"
+  ],
+  "stderr": "Reading prompt from stdin...\n",
+  "sameThreadId": true,
+  "mcpMethods": [
+   "initialize",
+   "notifications/initialized",
+   "tools/list"
+  ],
+  "rollouts": [
+   "sessions/2026/11/13/rollout-2026-11-13T09-11-25-01a1d275-9d89-7c51-80e0-4e432dd7021d.jsonl"
+  ],
+  "modelInput": [
+   {
+    "type": "message",
+    "role": "developer",
+    "content": [
+     {
+      "type": "input_text",
+      "text": "You are a coding agent running in the Codex CLI, a terminal-based coding assistant. Codex CLI is an open source project "
+     }
+    ]
+   },
+   {
+    "type": "message",
+    "role": "developer",
+    "content": [
+     {
+      "type": "input_text",
+      "text": "You are a check run."
+     },
+     {
+      "type": "input_text",
+      "text": "<skills_instructions>\n## Skills\nA skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Be"
+     },
+     {
+      "type": "input_text",
+      "text": "<permissions instructions>\nFilesystem sandboxing defines which files can be read or written. `sandbox_mode` is `danger-f"
+     }
+    ]
+   },
+   {
+    "type": "message",
+    "role": "user",
+    "content": [
+     {
+      "type": "input_text",
+      "text": "<environment_context>\n  <cwd><SCRATCH>\\ws</cwd>\n  <shell>powershell</shell>\n  <current_date>"
+     }
+    ]
+   },
+   {
+    "type": "message",
+    "role": "user",
+    "content": [
+     {
+      "type": "input_text",
+      "text": "<turn-context>\nToday.\n</turn-context>\n\nSay hello. é☃😀"
+     }
+    ]
+   },
+   {
+    "type": "reasoning",
+    "content": []
+   },
+   {
+    "type": "message",
+    "role": "assistant",
+    "content": [
+     {
+      "type": "output_text",
+      "text": "Hello there."
+     }
+    ]
+   },
+   {
+    "type": "message",
+    "role": "user",
+    "content": [
+     {
+      "type": "input_text",
+      "text": "<image name=[Image #1] path=\"<SCRATCH>\\tmp\\one pixel.png\">"
+     },
+     {
+      "type": "input_image",
+      "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSU…"
+     },
+     {
+      "type": "input_text",
+      "text": "</image>"
+     },
+     {
+      "type": "input_text",
+      "text": "And again?"
+     }
+    ]
+   }
+  ],
+  "rolloutTokenCounts": [
+   {
+    "total_token_usage": {
+     "input_tokens": 1200,
+     "cached_input_tokens": 200,
+     "cache_write_input_tokens": 0,
+     "output_tokens": 30,
+     "reasoning_output_tokens": 12,
+     "total_tokens": 1230
+    },
+    "last_token_usage": {
+     "input_tokens": 1200,
+     "cached_input_tokens": 200,
+     "cache_write_input_tokens": 0,
+     "output_tokens": 30,
+     "reasoning_output_tokens": 12,
+     "total_tokens": 1230
+    },
+    "last_usage_includes_reasoning": false,
+    "model_context_window": 121600
+   },
+   {
+    "total_token_usage": {
+     "input_tokens": 2500,
+     "cached_input_tokens": 300,
+     "cache_write_input_tokens": 0,
+     "output_tokens": 70,
+     "reasoning_output_tokens": 17,
+     "total_tokens": 2570
+    },
+    "last_token_usage": {
+     "input_tokens": 1300,
+     "cached_input_tokens": 100,
+     "cache_write_input_tokens": 0,
+     "output_tokens": 40,
+     "reasoning_output_tokens": 5,
+     "total_tokens": 1340
+    },
+    "last_usage_includes_reasoning": false,
+    "model_context_window": 121600
+   }
+  ]
+ },
+ "mcpToolCall": {
+  "exit": {
+   "code": 0
+  },
+  "stdoutLines": [
+   "{\"type\":\"thread.started\",\"thread_id\":\"01a1d254-52fb-79a0-b3fe-e87b9592d3d3\"}",
+   "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Model metadata for `test-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.\"}}",
+   "{\"type\":\"turn.started\"}",
+   "{\"type\":\"item.started\",\"item\":{\"id\":\"item_1\",\"type\":\"mcp_tool_call\",\"server\":\"tarsee\",\"tool\":\"tarsee_datetime\",\"arguments\":{\"timezone\":\"UTC\"},\"result\":null,\"error\":null,\"status\":\"in_progress\"}}",
+   "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"mcp_tool_call\",\"server\":\"tarsee\",\"tool\":\"tarsee_datetime\",\"arguments\":{\"timezone\":\"UTC\"},\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"It is noon.\"}],\"structured_content\":{\"hour\":12}},\"error\":null,\"status\":\"completed\"}}",
+   "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_2\",\"type\":\"agent_message\",\"text\":\"It is noon.\"}}",
+   "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":2400,\"cached_input_tokens\":400,\"cache_write_input_tokens\":0,\"output_tokens\":60,\"reasoning_output_tokens\":24}}"
+  ],
+  "stderr": "Reading prompt from stdin...\n",
+  "mcpDistinctConnections": 1,
+  "toolsCallRequest": {
+   "method": "POST",
+   "url": "/mcp",
+   "httpVersion": "1.1",
+   "headersInOrder": [
+    "user-agent: codex-mcp-client/0.167.0",
+    "mcp-protocol-version: 2025-06-18",
+    "accept: text/event-stream, application/json",
+    "content-type: application/json",
+    "authorization: Bearer mcp-check-token",
+    "host: 127.0.0.1:<PORT>",
+    "content-length: 817"
+   ],
+   "remotePort": 61715,
+   "body": {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "tools/call",
+    "params": {
+     "_meta": {
+      "callId": "call_0_0",
+      "x-codex-turn-metadata": {
+       "session_id": "01a1d254-52fb-79a0-b3fe-e87b9592d3d3",
+       "thread_id": "01a1d254-52fb-79a0-b3fe-e87b9592d3d3",
+       "reasoning_effort": "medium",
+       "turn_id": "01a1d254-5338-7833-a164-79bcb2fc6204",
+       "model": "test-model",
+       "thread_source": "user",
+       "turn_trigger": "exec",
+       "sandbox": "none",
+       "sandbox_mode": "danger-full-access",
+       "auto_review_enabled": false,
+       "node_repl_auto_review_required": false,
+       "node_repl_disabled": false,
+       "turn_started_at_unix_ms": 1794530104133,
+       "codex_version": "0.167.0"
+      },
+      "threadId": "01a1d254-52fb-79a0-b3fe-e87b9592d3d3",
+      "sessionId": "01a1d254-52fb-79a0-b3fe-e87b9592d3d3",
+      "windowId": "01a1d254-52fb-79a0-b3fe-e87b9592d3d3:0",
+      "itemId": "fc_0_0",
+      "progressToken": 1
+     },
+     "name": "tarsee_datetime",
+     "arguments": {
+      "timezone": "UTC"
+     }
+    }
+   },
+   "answerStatus": 200
+  },
+  "toolsOffered": [
+   {
+    "type": "function",
+    "name": "exec_command",
+    "description": "Runs a command in a PTY, returning output or a session ID fo"
+   },
+   {
+    "type": "function",
+    "name": "write_stdin",
+    "description": "Writes characters to an existing unified exec session and re"
+   },
+   {
+    "type": "function",
+    "name": "list_mcp_resources",
+    "description": "Lists resources provided by MCP servers. Resources allow ser"
+   },
+   {
+    "type": "function",
+    "name": "list_mcp_resource_templates",
+    "description": "Lists resource templates provided by MCP servers. Parameteri"
+   },
+   {
+    "type": "function",
+    "name": "read_mcp_resource",
+    "description": "Read a specific resource from an MCP server given the server"
+   },
+   {
+    "type": "function",
+    "name": "request_user_input",
+    "description": "Request user input for one to three short questions and wait"
+   },
+   {
+    "type": "function",
+    "name": "view_image",
+    "description": "View a local image file from the filesystem when visual insp"
+   },
+   {
+    "type": "namespace",
+    "name": "mcp__tarsee",
+    "description": "Tools in the mcp__tarsee namespace.",
+    "sub": [
+     {
+      "name": "tarsee_datetime",
+      "type": "function"
+     },
+     {
+      "name": "tarsee_slow",
+      "type": "function"
+     }
+    ]
+   }
+  ],
+  "whatTheModelGotBack": [
+   {
+    "type": "function_call",
+    "status": "completed",
+    "id": "fc_0_0",
+    "name": "tarsee_datetime",
+    "namespace": "mcp__tarsee",
+    "arguments": "{\"timezone\":\"UTC\"}",
+    "call_id": "call_0_0"
+   },
+   {
+    "type": "function_call_output",
+    "id": "fco_01a1d254-53e3-76e3-9eee-5cdf0784797c",
+    "call_id": "call_0_0",
+    "output": "Wall time: 0.0276 seconds\nOutput:\n{\"hour\":12}"
+   }
+  ]
+ },
+ "stdin": {
+  "emptyStdin": {
+   "exit": {
+    "code": 1,
+    "signal": null,
+    "ms": 170
+   },
+   "stdoutLines": [],
+   "stderr": "Reading prompt from stdin...\nNo prompt provided via stdin.\n",
+   "marks": {
+    "firstStdoutAtMs": null,
+    "firstStderrAtMs": 133,
+    "stdinClosedAtMs": 10,
+    "killedAtMs": null
+   },
+   "mcpRequests": 0,
+   "modelRequests": 0,
+   "whatTheModelGotFromTheUser": []
+  },
+  "whitespaceOnlyStdin": {
+   "exit": {
+    "code": 1,
+    "signal": null,
+    "ms": 88
+   },
+   "stdoutLines": [],
+   "stderr": "Reading prompt from stdin...\nNo prompt provided via stdin.\n",
+   "marks": {
+    "firstStdoutAtMs": null,
+    "firstStderrAtMs": 81,
+    "stdinClosedAtMs": 4,
+    "killedAtMs": null
+   },
+   "mcpRequests": 0,
+   "modelRequests": 0,
+   "whatTheModelGotFromTheUser": []
+  },
+  "stdinLeftOpen3s": {
+   "exit": {
+    "code": 0,
+    "signal": null,
+    "ms": 4408
+   },
+   "stdoutLines": [
+    "{\"type\":\"thread.started\",\"thread_id\":\"01a1d254-acf7-7213-b3b5-152a58257191\"}",
+    "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Model metadata for `test-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.\"}}",
+    "{\"type\":\"turn.started\"}",
+    "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"ok\"}}",
+    "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1200,\"cached_input_tokens\":200,\"cache_write_input_tokens\":0,\"output_tokens\":30,\"reasoning_output_tokens\":12}}"
+   ],
+   "stderr": "Reading prompt from stdin...\n",
+   "marks": {
+    "firstStdoutAtMs": 3182,
+    "firstStderrAtMs": 80,
+    "stdinClosedAtMs": 3015,
+    "killedAtMs": null,
+    "stdoutBytesBeforeStdinClosed": 0,
+    "stderrBeforeStdinClosed": "Reading prompt from stdin...\n"
+   },
+   "mcpRequests": 3,
+   "modelRequests": 1,
+   "whatTheModelGotFromTheUser": [
+    [
+     "Late close."
+    ]
+   ]
+  },
+  "promptWithTrailingNewlines": {
+   "exit": {
+    "code": 0,
+    "signal": null,
+    "ms": 1360
+   },
+   "stdoutLines": [
+    "{\"type\":\"thread.started\",\"thread_id\":\"01a1d254-b276-7db0-b71d-dcf8a89a71a7\"}",
+    "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Model metadata for `test-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.\"}}",
+    "{\"type\":\"turn.started\"}",
+    "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"ok\"}}",
+    "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1200,\"cached_input_tokens\":200,\"cache_write_input_tokens\":0,\"output_tokens\":30,\"reasoning_output_tokens\":12}}"
+   ],
+   "stderr": "Reading prompt from stdin...\n",
+   "marks": {
+    "firstStdoutAtMs": 164,
+    "firstStderrAtMs": 61,
+    "stdinClosedAtMs": 5,
+    "killedAtMs": null
+   },
+   "mcpRequests": 3,
+   "modelRequests": 1,
+   "whatTheModelGotFromTheUser": [
+    [
+     "Ends with newlines.\n\n\n"
+    ]
+   ]
+  },
+  "emptyStdinWithPicture": {
+   "exit": {
+    "code": 1,
+    "signal": null,
+    "ms": 85
+   },
+   "stdoutLines": [],
+   "stderr": "Reading prompt from stdin...\nNo prompt provided via stdin.\n",
+   "marks": {
+    "firstStdoutAtMs": null,
+    "firstStderrAtMs": 77,
+    "stdinClosedAtMs": 10,
+    "killedAtMs": null
+   },
+   "mcpRequests": 0,
+   "modelRequests": 0,
+   "whatTheModelGotFromTheUser": []
+  },
+  "pictureFileMissing": {
+   "exit": {
+    "code": 0,
+    "signal": null,
+    "ms": 1416
+   },
+   "stdoutLines": [
+    "{\"type\":\"thread.started\",\"thread_id\":\"01a1d254-b83d-7f32-ae2e-880139f99da8\"}",
+    "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Model metadata for `test-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.\"}}",
+    "{\"type\":\"turn.started\"}",
+    "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"ok\"}}",
+    "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1200,\"cached_input_tokens\":200,\"cache_write_input_tokens\":0,\"output_tokens\":30,\"reasoning_output_tokens\":12}}"
+   ],
+   "stderr": "Reading prompt from stdin...\n",
+   "marks": {
+    "firstStdoutAtMs": 196,
+    "firstStderrAtMs": 93,
+    "stdinClosedAtMs": 8,
+    "killedAtMs": null
+   },
+   "mcpRequests": 3,
+   "modelRequests": 1,
+   "whatTheModelGotFromTheUser": [
+    [
+     "Codex could not read the local image at `<SCRATCH>\\tmp\\no-such.png`: The system cannot find the file specified. (os error 2)|Look."
+    ]
+   ]
+  }
+ },
+ "jsonInsteadOfExperimentalJson": {
+  "exit": {
+   "code": 0,
+   "signal": null,
+   "ms": 1398
+  },
+  "stdoutLines": [
+   "{\"type\":\"thread.started\",\"thread_id\":\"01a1d254-bdb6-7db2-91a4-92c2f259a75c\"}",
+   "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Model metadata for `test-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.\"}}",
+   "{\"type\":\"turn.started\"}",
+   "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"ok\"}}",
+   "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1200,\"cached_input_tokens\":200,\"cache_write_input_tokens\":0,\"output_tokens\":30,\"reasoning_output_tokens\":12}}"
+  ],
+  "stderr": "Reading prompt from stdin...\n",
+  "marks": {
+   "firstStdoutAtMs": 188,
+   "firstStderrAtMs": 69,
+   "stdinClosedAtMs": 8,
+   "killedAtMs": null
+  },
+  "mcpRequests": 3,
+  "modelRequests": 1,
+  "whatTheModelGotFromTheUser": [
+   [
+    "Hello."
+   ]
+  ]
+ },
+ "resumeUnknownThread": {
+  "exit": {
+   "code": 1,
+   "signal": null,
+   "ms": 7432
+  },
+  "stdoutLines": [],
+  "stderr": "Reading prompt from stdin...\nError: thread/resume: thread/resume failed: no rollout found for thread id 01a1c000-0000-7000-8000-0000000000aa (code -32600)\n",
+  "marks": {
+   "firstStdoutAtMs": null,
+   "firstStderrAtMs": 66,
+   "stdinClosedAtMs": 8,
+   "killedAtMs": null
+  },
+  "mcpRequests": 0,
+  "modelRequests": 0,
+  "whatTheModelGotFromTheUser": []
+ },
+ "resumeNotAUuid": {
+  "exit": {
+   "code": 0,
+   "signal": null,
+   "ms": 11245
+  },
+  "stdoutLines": [
+   "{\"type\":\"thread.started\",\"thread_id\":\"01a1d255-00a8-7d53-873b-cdf929d7e676\"}",
+   "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Model metadata for `test-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.\"}}",
+   "{\"type\":\"turn.started\"}",
+   "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"ok\"}}",
+   "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1200,\"cached_input_tokens\":200,\"cache_write_input_tokens\":0,\"output_tokens\":30,\"reasoning_output_tokens\":12}}"
+  ],
+  "stderr": "Reading prompt from stdin...\n",
+  "marks": {
+   "firstStdoutAtMs": 8845,
+   "firstStderrAtMs": 2595,
+   "stdinClosedAtMs": 7,
+   "killedAtMs": null
+  },
+  "mcpRequests": 3,
+  "modelRequests": 1,
+  "whatTheModelGotFromTheUser": [
+   [
+    "Hello."
+   ]
+  ]
+ },
+ "refusedArguments": {
+  "unknownOption": {
+   "exit": {
+    "code": 2,
+    "signal": null
+   },
+   "stdoutLines": [],
+   "stderr": "error: unexpected argument '--bogus' found\n\n  tip: to pass '--bogus' as a value, use '-- --bogus'\n\nUsage: codex exec [OPTIONS] [PROMPT]\n       codex exec [OPTIONS] <COMMAND> [ARGS]\n\nFor more information, try '--help'.\n",
+   "modelRequests": 0,
+   "modelSaw": []
+  },
+  "badSandboxValue": {
+   "exit": {
+    "code": 2,
+    "signal": null
+   },
+   "stdoutLines": [],
+   "stderr": "error: invalid value 'wide-open' for '--sandbox <SANDBOX_MODE>'\n  [possible values: read-only, workspace-write, danger-full-access]\n\nFor more information, try '--help'.\n",
+   "modelRequests": 0,
+   "modelSaw": []
+  },
+  "configWithoutEquals": {
+   "exit": {
+    "code": 1,
+    "signal": null
+   },
+   "stdoutLines": [],
+   "stderr": "Error parsing -c overrides: Invalid override (missing '='): justakey\n",
+   "modelRequests": 0,
+   "modelSaw": []
+  },
+  "badApprovalPolicyWord": {
+   "exit": {
+    "code": 1,
+    "signal": null
+   },
+   "stdoutLines": [],
+   "stderr": "Error loading config.toml: unknown variant `sometimes`, expected one of `untrusted`, `on-failure`, `on-request`, `granular`, `never`\nin `approval_policy`\n\n",
+   "modelRequests": 0,
+   "modelSaw": []
+  },
+  "wrongType": {
+   "exit": {
+    "code": 1,
+    "signal": null
+   },
+   "stdoutLines": [],
+   "stderr": "Error loading config.toml: invalid type: string \"big\", expected i64\nin `model_context_window`\n\n",
+   "modelRequests": 0,
+   "modelSaw": []
+  },
+  "unknownKey": {
+   "exit": {
+    "code": 0,
+    "signal": null
+   },
+   "stdoutLines": [
+    "{\"type\":\"thread.started\",\"thread_id\":\"01a1d255-0f28-7cd0-8f79-3264fad197fb\"}",
+    "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Codex is ignoring 1 unrecognized configuration setting. Check for typos or deprecated settings.\\n  session-flags: `not_a_real_setting` is ignored.\"}}",
+    "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"error\",\"message\":\"Codex is ignoring 1 unrecognized configuration setting. Check for typos or deprecated settings.\\n  session-flags: `not_a_real_setting` is ignored.\"}}",
+    "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_2\",\"type\":\"error\",\"message\":\"Model metadata for `test-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.\"}}",
+    "{\"type\":\"turn.started\"}",
+    "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_3\",\"type\":\"agent_message\",\"text\":\"ok\"}}",
+    "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1200,\"cached_input_tokens\":200,\"cache_write_input_tokens\":0,\"output_tokens\":30,\"reasoning_output_tokens\":12}}"
+   ],
+   "stderr": "Reading prompt from stdin...\n",
+   "modelRequests": 1,
+   "modelSaw": [
+    {
+     "model": "test-model",
+     "effort": "medium"
+    }
+   ]
+  },
+  "laterConfigWins_effort": {
+   "exit": {
+    "code": 0,
+    "signal": null
+   },
+   "stdoutLines": [
+    "{\"type\":\"thread.started\",\"thread_id\":\"01a1d255-1498-78e3-b1a2-3b05c93314cc\"}",
+    "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Model metadata for `test-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.\"}}",
+    "{\"type\":\"turn.started\"}",
+    "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"ok\"}}",
+    "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1200,\"cached_input_tokens\":200,\"cache_write_input_tokens\":0,\"output_tokens\":30,\"reasoning_output_tokens\":12}}"
+   ],
+   "stderr": "Reading prompt from stdin...\n",
+   "modelRequests": 1,
+   "modelSaw": [
+    {
+     "model": "test-model",
+     "effort": "high"
+    }
+   ]
+  },
+  "laterConfigWins_model": {
+   "exit": {
+    "code": 0,
+    "signal": null
+   },
+   "stdoutLines": [
+    "{\"type\":\"thread.started\",\"thread_id\":\"01a1d255-19db-7620-81da-d3fc862a66e5\"}",
+    "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Model metadata for `test-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.\"}}",
+    "{\"type\":\"turn.started\"}",
+    "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"ok\"}}",
+    "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1200,\"cached_input_tokens\":200,\"cache_write_input_tokens\":0,\"output_tokens\":30,\"reasoning_output_tokens\":12}}"
+   ],
+   "stderr": "Reading prompt from stdin...\n",
+   "modelRequests": 1,
+   "modelSaw": [
+    {
+     "model": "test-model",
+     "effort": "medium"
+    }
+   ]
+  },
+  "providerNotDefined": {
+   "exit": {
+    "code": 1,
+    "signal": null
+   },
+   "stdoutLines": [],
+   "stderr": "Error: Model provider `nobody` not found\n",
+   "modelRequests": 0,
+   "modelSaw": []
+  },
+  "cdMissingFolder": {
+   "exit": {
+    "code": 1,
+    "signal": null
+   },
+   "stdoutLines": [],
+   "stderr": "Error: The system cannot find the file specified. (os error 2)\n",
+   "modelRequests": 0,
+   "modelSaw": []
+  },
+  "providerKeyVariableUnset": {
+   "exit": {
+    "code": 1,
+    "signal": null
+   },
+   "stdoutLines": [
+    "{\"type\":\"thread.started\",\"thread_id\":\"01a1d255-1f76-78e0-b34c-32fc8f41533c\"}",
+    "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Model metadata for `test-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.\"}}",
+    "{\"type\":\"turn.started\"}",
+    "{\"type\":\"error\",\"message\":\"Missing environment variable: `TARSEE_PROVIDER_KEY`.\"}",
+    "{\"type\":\"turn.failed\",\"error\":{\"message\":\"Missing environment variable: `TARSEE_PROVIDER_KEY`.\"}}"
+   ],
+   "stderr": "Reading prompt from stdin...\n",
+   "modelRequests": 0,
+   "modelSaw": []
+  },
+  "unquotedStringValue": {
+   "exit": {
+    "code": 0,
+    "signal": null
+   },
+   "stdoutLines": [
+    "{\"type\":\"thread.started\",\"thread_id\":\"01a1d255-20a7-7b30-a5ef-f61f0d9a5b5d\"}",
+    "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Model metadata for `test-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.\"}}",
+    "{\"type\":\"turn.started\"}",
+    "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"ok\"}}",
+    "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1200,\"cached_input_tokens\":200,\"cache_write_input_tokens\":0,\"output_tokens\":30,\"reasoning_output_tokens\":12}}"
+   ],
+   "stderr": "Reading prompt from stdin...\n",
+   "modelRequests": 1,
+   "modelSaw": [
+    {
+     "model": "test-model",
+     "effort": "medium"
+    }
+   ]
+  },
+  "badEffortWord": {
+   "exit": {
+    "code": 0,
+    "signal": null
+   },
+   "stdoutLines": [
+    "{\"type\":\"thread.started\",\"thread_id\":\"01a1d255-25e7-7bd1-b93f-bfa46c042362\"}",
+    "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Model metadata for `test-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.\"}}",
+    "{\"type\":\"turn.started\"}",
+    "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"ok\"}}",
+    "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1200,\"cached_input_tokens\":200,\"cache_write_input_tokens\":0,\"output_tokens\":30,\"reasoning_output_tokens\":12}}"
+   ],
+   "stderr": "Reading prompt from stdin...\n",
+   "modelRequests": 1,
+   "modelSaw": [
+    {
+     "model": "test-model",
+     "effort": "extreme"
+    }
+   ]
+  }
+ },
+ "mcpFailures": {
+  "nothingListening": {
+   "exit": {
+    "code": 1,
+    "ms": 5714
+   },
+   "stdoutLines": [],
+   "stderr": "Reading prompt from stdin...\n2026-11-13T00:36:24.514155Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when Client(HttpRequest(HttpRequest(\"http/request failed: error sending request for url (http://127.0.0.1:9/mcp)\")))\n2026-11-13T00:36:25.790474Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when Client(HttpRequest(HttpRequest(\"http/request failed: error sending request for url (http://127.0.0.1:9/mcp)\")))\n2026-11-13T00:36:27.852191Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when Client(HttpRequest(HttpRequest(\"http/request failed: error sending request for url (http://127.0.0.1:9/mcp)\")))\n2026-11-13T00:36:27.855156Z ERROR codex_core::session: Failed to create session: required MCP servers failed to initialize: tarsee: handshaking with MCP server failed: Send message error Transport [codex_rmcp_client::tool_list_changes::ToolListChanges<codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>>] error: Client error: HTTP request failed: http/request failed: error sending request for url (http://127.0.0.1:9/mcp), when send initialize request: Send message error Transport [codex_rmcp_client::tool_list_changes::ToolListChanges<codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>>] error: Client error: HTTP request failed: http/request failed: error sending request for url (http://127.0.0.1:9/mcp), when send initialize request\nError: thread/start: thread/start failed: error creating thread: Fatal error: Failed to initialize session: required MCP servers failed to initialize: tarsee: handshaking with MCP server failed: Send message error Transport [codex_rmcp_client::tool_list_changes::ToolListChanges<codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>>] error: Client error: HTTP request failed: http/request failed: error sending request for url (http://127.0.0.1:9/mcp), when send initialize request: Send message error Transport [codex_rmcp_client::tool_list_changes::ToolListChanges<codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>>] error: Client error: HTTP request failed: http/request failed: error sending request for url (http://127.0.0.1:9/mcp), when send initialize request (code -32603)\n",
+   "modelRequests": 0
+  },
+  "answers401": {
+   "exit": {
+    "code": 1,
+    "ms": 1210
+   },
+   "stdoutLines": [],
+   "stderr": "Reading prompt from stdin...\n2026-11-13T00:36:29.075614Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: \"Bearer realm=\\\"tarsee\\\"\" })\n2026-11-13T00:36:29.076244Z ERROR codex_core::session: Failed to create session: required MCP servers failed to initialize: tarsee: handshaking with MCP server failed: Send message error Transport [codex_rmcp_client::tool_list_changes::ToolListChanges<codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>>] error: Auth required, when send initialize request: Send message error Transport [codex_rmcp_client::tool_list_changes::ToolListChanges<codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>>] error: Auth required, when send initialize request\nError: thread/start: thread/start failed: error creating thread: Fatal error: Failed to initialize session: required MCP servers failed to initialize: tarsee: handshaking with MCP server failed: Send message error Transport [codex_rmcp_client::tool_list_changes::ToolListChanges<codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>>] error: Auth required, when send initialize request: Send message error Transport [codex_rmcp_client::tool_list_changes::ToolListChanges<codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>>] error: Auth required, when send initialize request (code -32603)\n",
+   "requests": [
+    {
+     "method": "POST",
+     "url": "/mcp",
+     "httpVersion": "1.1",
+     "headersInOrder": [
+      "user-agent: codex-mcp-client/0.167.0",
+      "accept: text/event-stream, application/json",
+      "content-type: application/json",
+      "authorization: Bearer mcp-check-token",
+      "host: 127.0.0.1:<PORT>",
+      "content-length: 217"
+     ],
+     "remotePort": 55690,
+     "body": {
+      "jsonrpc": "2.0",
+      "id": 0,
+      "method": "initialize",
+      "params": {
+       "protocolVersion": "2025-06-18",
+       "capabilities": {
+        "elicitation": {
+         "form": {},
+         "url": {}
+        }
+       },
+       "clientInfo": {
+        "name": "codex-mcp-client",
+        "title": "Codex",
+        "version": "0.167.0"
+       }
+      }
+     },
+     "answerStatus": 401
+    }
+   ]
+  },
+  "tokenVariableUnset": {
+   "exit": {
+    "code": 1,
+    "ms": 1209
+   },
+   "stdoutLines": [],
+   "stderr": "Reading prompt from stdin...\n2026-11-13T00:36:30.276365Z ERROR codex_core::session: Failed to create session: required MCP servers failed to initialize: tarsee: Environment variable TARSEE_MCP_TOKEN for MCP server 'tarsee' is not set\nError: thread/start: thread/start failed: error creating thread: Fatal error: Failed to initialize session: required MCP servers failed to initialize: tarsee: Environment variable TARSEE_MCP_TOKEN for MCP server 'tarsee' is not set (code -32603)\n",
+   "requests": 0
+  },
+  "endpointSilent": {
+   "exit": {
+    "code": 1,
+    "signal": null,
+    "ms": 27116
+   },
+   "stdoutLines": [],
+   "stderr": "Reading prompt from stdin...\n2026-11-13T01:03:52.934843Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when Client(HttpRequest(HttpRequest(\"http/request failed: error sending request for url (http://127.0.0.1:<PORT>/mcp)\")))\n2026-11-13T01:03:52.934844Z ERROR codex_core::session: Failed to create session: required MCP servers failed to initialize: tarsee: timed out handshaking with MCP server after 19.9999995s: deadline has elapsed\nError: thread/start: thread/start failed: error creating thread: Fatal error: Failed to initialize session: required MCP servers failed to initialize: tarsee: timed out handshaking with MCP server after 19.9999995s: deadline has elapsed (code -32603)\n",
+   "requestsTheEndpointTook": [
+    "initialize"
+   ],
+   "modelRequests": 0
+  }
+ },
+ "providerErrors": {
+  "status401": {
+   "exit": {
+    "code": 1,
+    "ms": 6996
+   },
+   "stdoutLines": [
+    "{\"type\":\"thread.started\",\"thread_id\":\"01a1d255-ae12-7182-92a3-480ddb5edc78\"}",
+    "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Model metadata for `test-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.\"}}",
+    "{\"type\":\"turn.started\"}",
+    "{\"type\":\"error\",\"message\":\"Reconnecting... 1/5 (unexpected status 401 Unauthorized: Incorrect API key provided., url: http://127.0.0.1:<PORT>/v1/responses)\"}",
+    "{\"type\":\"error\",\"message\":\"Reconnecting... 2/5 (unexpected status 401 Unauthorized: Incorrect API key provided., url: http://127.0.0.1:<PORT>/v1/responses)\"}",
+    "{\"type\":\"error\",\"message\":\"Reconnecting... 3/5 (unexpected status 401 Unauthorized: Incorrect API key provided., url: http://127.0.0.1:<PORT>/v1/responses)\"}",
+    "{\"type\":\"error\",\"message\":\"Reconnecting... 4/5 (unexpected status 401 Unauthorized: Incorrect API key provided., url: http://127.0.0.1:<PORT>/v1/responses)\"}",
+    "{\"type\":\"error\",\"message\":\"Reconnecting... 5/5 (unexpected status 401 Unauthorized: Incorrect API key provided., url: http://127.0.0.1:<PORT>/v1/responses)\"}",
+    "{\"type\":\"error\",\"message\":\"unexpected status 401 Unauthorized: Incorrect API key provided., url: http://127.0.0.1:<PORT>/v1/responses\"}",
+    "{\"type\":\"turn.failed\",\"error\":{\"message\":\"unexpected status 401 Unauthorized: Incorrect API key provided., url: http://127.0.0.1:<PORT>/v1/responses\"}}"
+   ],
+   "stderr": "Reading prompt from stdin...\n",
+   "modelRequests": 6,
+   "requestTimesMs": [
+    389,
+    589,
+    1022,
+    1843,
+    3533,
+    6920
+   ]
+  },
+  "status404": {
+   "exit": {
+    "code": 1,
+    "ms": 391
+   },
+   "stdoutLines": [
+    "{\"type\":\"thread.started\",\"thread_id\":\"01a1d255-c922-7592-bfe9-5251a33b1a72\"}",
+    "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Model metadata for `test-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.\"}}",
+    "{\"type\":\"turn.started\"}",
+    "{\"type\":\"error\",\"message\":\"The model `test-model` does not exist.\"}",
+    "{\"type\":\"turn.failed\",\"error\":{\"message\":\"The model `test-model` does not exist.\"}}"
+   ],
+   "stderr": "Reading prompt from stdin...\n",
+   "modelRequests": 1,
+   "requestTimesMs": [
+    338
+   ]
+  },
+  "status400": {
+   "exit": {
+    "code": 1,
+    "ms": 416
+   },
+   "stdoutLines": [
+    "{\"type\":\"thread.started\",\"thread_id\":\"01a1d255-cab2-79d3-836a-280fb94190d3\"}",
+    "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Model metadata for `test-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.\"}}",
+    "{\"type\":\"turn.started\"}",
+    "{\"type\":\"error\",\"message\":\"{\\\"error\\\":{\\\"message\\\":\\\"Bad request body.\\\",\\\"type\\\":\\\"invalid_request_error\\\",\\\"code\\\":\\\"bad\\\"}}\"}",
+    "{\"type\":\"turn.failed\",\"error\":{\"message\":\"{\\\"error\\\":{\\\"message\\\":\\\"Bad request body.\\\",\\\"type\\\":\\\"invalid_request_error\\\",\\\"code\\\":\\\"bad\\\"}}\"}}"
+   ],
+   "stderr": "Reading prompt from stdin...\n",
+   "modelRequests": 1,
+   "requestTimesMs": [
+    367
+   ]
+  },
+  "status429": {
+   "exit": {
+    "code": 1,
+    "ms": 356
+   },
+   "stdoutLines": [
+    "{\"type\":\"thread.started\",\"thread_id\":\"01a1d255-cc4f-71c2-a82a-74bc74c210d0\"}",
+    "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Model metadata for `test-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.\"}}",
+    "{\"type\":\"turn.started\"}",
+    "{\"type\":\"error\",\"message\":\"exceeded retry limit, last status: 429 Too Many Requests\"}",
+    "{\"type\":\"turn.failed\",\"error\":{\"message\":\"exceeded retry limit, last status: 429 Too Many Requests\"}}"
+   ],
+   "stderr": "Reading prompt from stdin...\n",
+   "modelRequests": 1,
+   "requestTimesMs": [
+    316
+   ]
+  },
+  "status500": {
+   "exit": {
+    "code": 1,
+    "ms": 978
+   },
+   "stdoutLines": [
+    "{\"type\":\"thread.started\",\"thread_id\":\"01a1d255-cda5-7450-a4c4-ce3ac3ee0db7\"}",
+    "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Model metadata for `test-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.\"}}",
+    "{\"type\":\"turn.started\"}",
+    "{\"type\":\"error\",\"message\":\"Reconnecting... 1/1 (We’re currently experiencing high demand, which may cause temporary errors.)\"}",
+    "{\"type\":\"error\",\"message\":\"We’re currently experiencing high demand, which may cause temporary errors.\"}",
+    "{\"type\":\"turn.failed\",\"error\":{\"message\":\"We’re currently experiencing high demand, which may cause temporary errors.\"}}"
+   ],
+   "stderr": "Reading prompt from stdin...\n",
+   "modelRequests": 4,
+   "requestTimesMs": [
+    296,
+    520,
+    735,
+    934
+   ]
+  }
+ },
+ "stop": {
+  "note": "ended with Node's child.kill(), which is what the SDK's abort does; Node reports its own kill as signal SIGTERM on Windows too",
+  "killedWhileTheModelHangs": {
+   "exit": {
+    "code": null,
+    "signal": "SIGTERM",
+    "ms": 808
+   },
+   "marks": {
+    "firstStdoutAtMs": 268,
+    "firstStderrAtMs": 135,
+    "stdinClosedAtMs": 7,
+    "killedAtMs": 739
+   },
+   "stdoutLines": [
+    "{\"type\":\"thread.started\",\"thread_id\":\"01a1d255-d1ca-79f3-9448-095810b5e92a\"}",
+    "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Model metadata for `test-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.\"}}",
+    "{\"type\":\"turn.started\"}"
+   ],
+   "stderr": "Reading prompt from stdin...\n"
+  },
+  "killedWhileAnMcpToolRuns": {
+   "exit": {
+    "code": null,
+    "signal": "SIGTERM",
+    "ms": 760
+   },
+   "marks": {
+    "firstStdoutAtMs": 273,
+    "firstStderrAtMs": 147,
+    "stdinClosedAtMs": 11,
+    "killedAtMs": 724
+   },
+   "stdoutLines": [
+    "{\"type\":\"thread.started\",\"thread_id\":\"01a1d255-d4ea-7f11-8212-44735335776b\"}",
+    "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Model metadata for `test-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.\"}}",
+    "{\"type\":\"turn.started\"}",
+    "{\"type\":\"item.started\",\"item\":{\"id\":\"item_1\",\"type\":\"mcp_tool_call\",\"server\":\"tarsee\",\"tool\":\"tarsee_slow\",\"arguments\":{},\"result\":null,\"error\":null,\"status\":\"in_progress\"}}"
+   ],
+   "stderr": "Reading prompt from stdin...\n"
+  },
+  "commandRunningWhenTheProgramIsTerminated": {
+   "exit": {
+    "code": null,
+    "signal": "SIGTERM"
+   },
+   "marks": {
+    "firstStdoutAtMs": 370,
+    "firstStderrAtMs": 182,
+    "stdinClosedAtMs": 10,
+    "killedAtMs": 3324
+   },
+   "stdoutLines": [
+    "{\"type\":\"thread.started\",\"thread_id\":\"01a1d258-7286-7f62-80e8-f950bd02675e\"}",
+    "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Model metadata for `test-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.\"}}",
+    "{\"type\":\"turn.started\"}",
+    "{\"type\":\"item.started\",\"item\":{\"id\":\"item_1\",\"type\":\"command_execution\",\"command\":\"\\\"<SYSTEMROOT>\\\\\\\\System32\\\\\\\\WindowsPowerShell\\\\\\\\v1.0\\\\\\\\powershell.exe\\\" -Command '$i=0; while($i -lt 400){ Set-Content -LiteralPath '\\\"'<TMP>\\\\\\\\r9-beat.txt' -Value \\\"'$i; Start-Sleep -Milliseconds 100; $i++ }'\",\"aggregated_output\":\"\",\"exit_code\":null,\"status\":\"in_progress\"}}"
+   ],
+   "stderr": "Reading prompt from stdin...\n",
+   "beat": {
+    "rightAfterTheProgramEnded": "19",
+    "after1500ms": "19",
+    "after3000ms": "19"
+   },
+   "commandStillRunningAfterwards": false
+  }
+ },
+ "commandThatExits3": {
+  "exit": {
+   "code": 0
+  },
+  "stdoutLines": [
+   "{\"type\":\"thread.started\",\"thread_id\":\"01a1d258-8af4-7f51-b802-1ba35520e969\"}",
+   "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Model metadata for `test-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.\"}}",
+   "{\"type\":\"turn.started\"}",
+   "{\"type\":\"item.started\",\"item\":{\"id\":\"item_1\",\"type\":\"command_execution\",\"command\":\"\\\"<SYSTEMROOT>\\\\\\\\System32\\\\\\\\WindowsPowerShell\\\\\\\\v1.0\\\\\\\\powershell.exe\\\" -Command \\\"Write-Output 'one'; Write-Error 'two'; exit 3\\\"\",\"aggregated_output\":\"\",\"exit_code\":null,\"status\":\"in_progress\"}}",
+   "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"command_execution\",\"command\":\"\\\"<SYSTEMROOT>\\\\\\\\System32\\\\\\\\WindowsPowerShell\\\\\\\\v1.0\\\\\\\\powershell.exe\\\" -Command \\\"Write-Output 'one'; Write-Error 'two'; exit 3\\\"\",\"aggregated_output\":\"one\\r\\ntry { [Console]::OutputEncoding=[System.Text.Encoding]::UTF8 } catch {}\\r\\nWrite-Output 'one'; Write-Error 'two'; exit 3 : two\\r\\n    + CategoryInfo          : NotSpecified: (:) [Write-Error], WriteErrorException\\r\\n    + FullyQualifiedErrorId : Microsoft.PowerShell.Commands.WriteErrorException\\r\\n \\r\\n\",\"exit_code\":3,\"status\":\"failed\"}}",
+   "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_2\",\"type\":\"agent_message\",\"text\":\"done\"}}",
+   "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":2400,\"cached_input_tokens\":400,\"cache_write_input_tokens\":0,\"output_tokens\":60,\"reasoning_output_tokens\":24}}"
+  ],
+  "stderr": "Reading prompt from stdin...\n"
+ },
+ "howTarseeShowsTheCommands": {
+  "note": "codex-events.js unwrapShellCommand() on the two command strings above",
+  "commandRunningWhenTheProgramIsTerminated": {
+   "command": "\"<SYSTEMROOT>\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command '$i=0; while($i -lt 400){ Set-Content -LiteralPath '\"'<TMP>\\\\r9-beat.txt' -Value \"'$i; Start-Sleep -Milliseconds 100; $i++ }'",
+   "unwrapped": "$i=0; while($i -lt 400){ Set-Content -LiteralPath '\"'<TMP>\\\\r9-beat.txt' -Value \"'$i; Start-Sleep -Milliseconds 100; $i++ }"
+  },
+  "commandThatExits3": {
+   "command": "\"<SYSTEMROOT>\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \"Write-Output 'one'; Write-Error 'two'; exit 3\"",
+   "unwrapped": "Write-Output 'one'; Write-Error 'two'; exit 3"
+  }
+ },
+ "outsideATurn": {
+  "loginStatus_noAuth": {
+   "args": [
+    "-c",
+    "cli_auth_credentials_store=\"file\"",
+    "-c",
+    "check_for_update_on_startup=false",
+    "-c",
+    "project_root_markers=[]",
+    "login",
+    "status"
+   ],
+   "exit": {
+    "code": 1,
+    "signal": null,
+    "ms": 44
+   },
+   "stdout": "",
+   "stderr": "Not logged in\n",
+   "homeAfter": [
+    "tmp/",
+    "tmp/arg0-windows/",
+    "tmp/arg0-windows/codex-arg0<RANDOM>/",
+    "tmp/arg0-windows/codex-arg0<RANDOM>/.lock",
+    "tmp/arg0-windows/codex-arg0<RANDOM>/apply_patch.bat",
+    "tmp/arg0-windows/codex-arg0<RANDOM>/applypatch.bat"
+   ]
+  },
+  "logout_noAuth": {
+   "args": [
+    "-c",
+    "cli_auth_credentials_store=\"file\"",
+    "-c",
+    "check_for_update_on_startup=false",
+    "-c",
+    "project_root_markers=[]",
+    "logout"
+   ],
+   "exit": {
+    "code": 0,
+    "signal": null,
+    "ms": 47
+   },
+   "stdout": "",
+   "stderr": "Not logged in\n",
+   "homeAfter": [
+    "auth.json.lock",
+    "auth.lock",
+    "tmp/",
+    "tmp/arg0-windows/",
+    "tmp/arg0-windows/codex-arg0<RANDOM>/",
+    "tmp/arg0-windows/codex-arg0<RANDOM>/.lock",
+    "tmp/arg0-windows/codex-arg0<RANDOM>/apply_patch.bat",
+    "tmp/arg0-windows/codex-arg0<RANDOM>/applypatch.bat"
+   ]
+  },
+  "loginStatus_apiKey": {
+   "args": [
+    "-c",
+    "cli_auth_credentials_store=\"file\"",
+    "-c",
+    "check_for_update_on_startup=false",
+    "-c",
+    "project_root_markers=[]",
+    "login",
+    "status"
+   ],
+   "exit": {
+    "code": 0,
+    "signal": null,
+    "ms": 60
+   },
+   "stdout": "",
+   "stderr": "API key configured - sk-check***XYZ12\nAuthentication is checked when you send a request.\n",
+   "homeAfter": [
+    "auth.json",
+    "auth.json.lock",
+    "auth.lock",
+    "tmp/",
+    "tmp/arg0-windows/",
+    "tmp/arg0-windows/codex-arg0<RANDOM>/",
+    "tmp/arg0-windows/codex-arg0<RANDOM>/.lock",
+    "tmp/arg0-windows/codex-arg0<RANDOM>/apply_patch.bat",
+    "tmp/arg0-windows/codex-arg0<RANDOM>/applypatch.bat"
+   ]
+  },
+  "mcpList": {
+   "args": [
+    "-c",
+    "cli_auth_credentials_store=\"file\"",
+    "-c",
+    "check_for_update_on_startup=false",
+    "-c",
+    "project_root_markers=[]",
+    "-c",
+    "mcp_servers.tarsee.url=\"http://127.0.0.1:<PORT>/mcp\"",
+    "-c",
+    "mcp_servers.tarsee.bearer_token_env_var=\"TARSEE_MCP_TOKEN\"",
+    "-c",
+    "mcp_servers.tarsee.default_tools_approval_mode=\"approve\"",
+    "-c",
+    "mcp_servers.tarsee.required=true",
+    "-c",
+    "mcp_servers.tarsee.startup_timeout_sec=20",
+    "-c",
+    "mcp_servers.tarsee.tool_timeout_sec=300",
+    "mcp",
+    "list",
+    "--json"
+   ],
+   "exit": {
+    "code": 0,
+    "signal": null,
+    "ms": 51
+   },
+   "stdout": "[\n  {\n    \"name\": \"tarsee\",\n    \"enabled\": true,\n    \"disabled_reason\": null,\n    \"transport\": {\n      \"type\": \"streamable_http\",\n      \"url\": \"http://127.0.0.1:<PORT>/mcp\",\n      \"bearer_token_env_var\": \"TARSEE_MCP_TOKEN\",\n      \"http_headers\": null,\n      \"env_http_headers\": null,\n      \"http_headers_helper\": null\n    },\n    \"startup_timeout_sec\": 20.0,\n    \"tool_timeout_sec\": 300.0,\n    \"auth_status\": \"bearer_token\"\n  }\n]\n",
+   "stderr": "",
+   "homeAfter": [
+    "auth.json.lock",
+    "auth.lock",
+    "tmp/",
+    "tmp/arg0-windows/"
+   ]
+  },
+  "mcpGet": {
+   "args": [
+    "-c",
+    "cli_auth_credentials_store=\"file\"",
+    "-c",
+    "check_for_update_on_startup=false",
+    "-c",
+    "project_root_markers=[]",
+    "-c",
+    "mcp_servers.tarsee.url=\"http://127.0.0.1:<PORT>/mcp\"",
+    "-c",
+    "mcp_servers.tarsee.bearer_token_env_var=\"TARSEE_MCP_TOKEN\"",
+    "-c",
+    "mcp_servers.tarsee.default_tools_approval_mode=\"approve\"",
+    "-c",
+    "mcp_servers.tarsee.required=true",
+    "-c",
+    "mcp_servers.tarsee.startup_timeout_sec=20",
+    "-c",
+    "mcp_servers.tarsee.tool_timeout_sec=300",
+    "mcp",
+    "get",
+    "tarsee",
+    "--json"
+   ],
+   "exit": {
+    "code": 0,
+    "signal": null,
+    "ms": 48
+   },
+   "stdout": "{\n  \"name\": \"tarsee\",\n  \"enabled\": true,\n  \"disabled_reason\": null,\n  \"transport\": {\n    \"type\": \"streamable_http\",\n    \"url\": \"http://127.0.0.1:<PORT>/mcp\",\n    \"bearer_token_env_var\": \"TARSEE_MCP_TOKEN\",\n    \"http_headers\": null,\n    \"env_http_headers\": null,\n    \"http_headers_helper\": null\n  },\n  \"enabled_tools\": null,\n  \"disabled_tools\": null,\n  \"startup_timeout_sec\": 20.0,\n  \"tool_timeout_sec\": 300.0\n}\n",
+   "stderr": "",
+   "homeAfter": [
+    "auth.json.lock",
+    "auth.lock",
+    "tmp/",
+    "tmp/arg0-windows/"
+   ]
+  },
+  "deviceAuth_hiddenIssuerOption_deadPort": {
+   "args": [
+    "-c",
+    "cli_auth_credentials_store=\"file\"",
+    "-c",
+    "check_for_update_on_startup=false",
+    "-c",
+    "project_root_markers=[]",
+    "login",
+    "--device-auth",
+    "--experimental_issuer",
+    "http://127.0.0.1:9"
+   ],
+   "exit": {
+    "code": 1,
+    "signal": null,
+    "ms": 1074
+   },
+   "stdout": "",
+   "stderr": "Error logging in: error sending request for url (http://127.0.0.1:9/api/accounts/deviceauth/usercode)\n",
+   "homeAfter": [
+    "auth.json.lock",
+    "auth.lock",
+    "log/",
+    "log/codex-login.log",
+    "tmp/",
+    "tmp/arg0-windows/",
+    "tmp/arg0-windows/codex-arg0<RANDOM>/",
+    "tmp/arg0-windows/codex-arg0<RANDOM>/.lock",
+    "tmp/arg0-windows/codex-arg0<RANDOM>/apply_patch.bat",
+    "tmp/arg0-windows/codex-arg0<RANDOM>/applypatch.bat"
+   ]
+  }
+ },
+ "mcpRequestsDuringMcpListAndGet": 0
+}

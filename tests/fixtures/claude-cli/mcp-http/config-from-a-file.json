@@ -1,0 +1,279 @@
+{
+  "name": "config-from-a-file",
+  "description": "--mcp-config followed by the path of a JSON file.",
+  "how": "The real claude 2.1.319 pointed at a small local HTTP server that logs every request and answers initialize, tools/list and tools/call; a loopback stand-in for the Messages API scripted a call to mcp__tarsee__tarsee_datetime.",
+  "mcp_arguments": [
+    "--mcp-config",
+    "<SCRATCH>\\real\\mcp-config-file.json"
+  ],
+  "exit_code": 0,
+  "system_init": {
+    "mcp_servers": [
+      {
+        "name": "tarsee",
+        "status": "connected",
+        "source": "dynamic"
+      }
+    ],
+    "tools": [
+      "Bash",
+      "Edit",
+      "Glob",
+      "Grep",
+      "Read",
+      "Write",
+      "mcp__tarsee__tarsee_calculator",
+      "mcp__tarsee__tarsee_datetime"
+    ]
+  },
+  "stdout_message_counts": {
+    "control_response": 1,
+    "system/session_state_changed": 2,
+    "system/init": 1,
+    "system/status": 2,
+    "stream_event": 13,
+    "assistant": 2,
+    "user": 1,
+    "result/success": 1
+  },
+  "tools_offered_to_the_model_in_each_api_request": [
+    [
+      "Bash",
+      "Edit",
+      "Glob",
+      "Grep",
+      "Read",
+      "Write",
+      "mcp__tarsee__tarsee_calculator",
+      "mcp__tarsee__tarsee_datetime"
+    ],
+    [
+      "Bash",
+      "Edit",
+      "Glob",
+      "Grep",
+      "Read",
+      "Write",
+      "mcp__tarsee__tarsee_calculator",
+      "mcp__tarsee__tarsee_datetime"
+    ]
+  ],
+  "requests_the_server_received": [
+    {
+      "method": "POST",
+      "path": "/mcp",
+      "answered_with_status": 200,
+      "headers": {
+        "accept": "application/json, text/event-stream",
+        "accept-encoding": "identity",
+        "authorization": "Bearer <TOKEN>",
+        "content-type": "application/json",
+        "user-agent": "claude-code/2.1.319 (sdk-ts)",
+        "mcp-method": "server/discover",
+        "mcp-protocol-version": "2026-07-28",
+        "connection": "keep-alive",
+        "host": "127.0.0.1:<PORT>",
+        "content-length": "458"
+      },
+      "body": {
+        "jsonrpc": "2.0",
+        "id": "server-discover-probe-1",
+        "method": "server/discover",
+        "params": {
+          "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientInfo": {
+              "name": "claude-code",
+              "title": "Claude Code",
+              "version": "2.1.319",
+              "description": "Anthropic's agentic coding tool",
+              "websiteUrl": "https://claude.com/claude-code"
+            },
+            "io.modelcontextprotocol/clientCapabilities": {
+              "roots": {
+                "listChanged": true
+              },
+              "elicitation": {
+                "form": {},
+                "url": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/mcp",
+      "answered_with_status": 200,
+      "headers": {
+        "accept": "application/json, text/event-stream",
+        "accept-encoding": "identity",
+        "authorization": "Bearer <TOKEN>",
+        "content-type": "application/json",
+        "user-agent": "claude-code/2.1.319 (sdk-ts)",
+        "connection": "keep-alive",
+        "host": "127.0.0.1:<PORT>",
+        "content-length": "341"
+      },
+      "body": {
+        "method": "initialize",
+        "params": {
+          "protocolVersion": "2025-11-25",
+          "capabilities": {
+            "roots": {
+              "listChanged": true
+            },
+            "elicitation": {
+              "form": {},
+              "url": {}
+            }
+          },
+          "clientInfo": {
+            "name": "claude-code",
+            "title": "Claude Code",
+            "version": "2.1.319",
+            "description": "Anthropic's agentic coding tool",
+            "websiteUrl": "https://claude.com/claude-code"
+          }
+        },
+        "jsonrpc": "2.0",
+        "id": 0
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/mcp",
+      "answered_with_status": 202,
+      "headers": {
+        "accept": "application/json, text/event-stream",
+        "accept-encoding": "identity",
+        "authorization": "Bearer <TOKEN>",
+        "content-type": "application/json",
+        "user-agent": "claude-code/2.1.319 (sdk-ts)",
+        "mcp-protocol-version": "2025-11-25",
+        "connection": "keep-alive",
+        "host": "127.0.0.1:<PORT>",
+        "content-length": "54"
+      },
+      "body": {
+        "jsonrpc": "2.0",
+        "method": "notifications/initialized"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/mcp",
+      "answered_with_status": 405,
+      "headers": {
+        "accept": "text/event-stream",
+        "accept-encoding": "identity",
+        "authorization": "Bearer <TOKEN>",
+        "user-agent": "claude-code/2.1.319 (sdk-ts)",
+        "mcp-protocol-version": "2025-11-25",
+        "connection": "keep-alive",
+        "host": "127.0.0.1:<PORT>"
+      },
+      "body": null
+    },
+    {
+      "method": "POST",
+      "path": "/mcp",
+      "answered_with_status": 200,
+      "headers": {
+        "accept": "application/json, text/event-stream",
+        "accept-encoding": "identity",
+        "authorization": "Bearer <TOKEN>",
+        "content-type": "application/json",
+        "user-agent": "claude-code/2.1.319 (sdk-ts)",
+        "mcp-protocol-version": "2025-11-25",
+        "connection": "keep-alive",
+        "host": "127.0.0.1:<PORT>",
+        "content-length": "46"
+      },
+      "body": {
+        "method": "tools/list",
+        "jsonrpc": "2.0",
+        "id": 1
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/mcp",
+      "answered_with_status": 200,
+      "headers": {
+        "accept": "application/json, text/event-stream",
+        "accept-encoding": "identity",
+        "authorization": "Bearer <TOKEN>",
+        "content-type": "application/json",
+        "user-agent": "claude-code/2.1.319 (sdk-ts)",
+        "mcp-protocol-version": "2025-11-25",
+        "connection": "keep-alive",
+        "host": "127.0.0.1:<PORT>",
+        "content-length": "193"
+      },
+      "body": {
+        "method": "tools/call",
+        "params": {
+          "name": "tarsee_datetime",
+          "arguments": {
+            "timezone": "UTC",
+            "format": "iso"
+          },
+          "_meta": {
+            "claudecode/toolUseId": "toolu_mcp_1",
+            "progressToken": 2
+          }
+        },
+        "jsonrpc": "2.0",
+        "id": 2
+      }
+    }
+  ],
+  "tool_messages_on_stdout": [
+    {
+      "type": "assistant",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_mcp_1",
+          "name": "mcp__tarsee__tarsee_datetime",
+          "input": {
+            "timezone": "UTC",
+            "format": "iso"
+          }
+        }
+      ]
+    },
+    {
+      "type": "user",
+      "content": [
+        {
+          "tool_use_id": "toolu_mcp_1",
+          "type": "tool_result",
+          "content": [
+            {
+              "type": "text",
+              "text": "called tarsee_datetime with {\"timezone\":\"UTC\",\"format\":\"iso\"}: 2026-11-13T00:00:00Z"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "The time is noted."
+        }
+      ]
+    },
+    {
+      "type": "result",
+      "subtype": "success",
+      "is_error": false,
+      "result": "The time is noted."
+    }
+  ]
+}

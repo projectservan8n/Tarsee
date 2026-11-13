@@ -1,0 +1,103 @@
+{
+  "name": "real-08-mcp-server-failures",
+  "what": "Tarsee's MCP server is `required = true`: what the program does when it cannot be reached, when it refuses the token, and when the token's variable is not set.",
+  "made_with": {
+    "program": "codex 0.167.0 (the real pinned program), started with the argument list, environment and stdin the SDK produced",
+    "platform": "win32"
+  },
+  "nothingListensAtTheAddress": {
+    "exitCode": 1,
+    "ms": 5817,
+    "stdoutLines": [],
+    "stderr": "Reading prompt from stdin...\n2026-11-13T00:17:09.037218Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when Client(HttpRequest(HttpRequest(\"http/request failed: error sending request for url (http://127.0.0.1:9/mcp)\")))\n2026-11-13T00:17:10.320452Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when Client(HttpRequest(HttpRequest(\"http/request failed: error sending request for url (http://127.0.0.1:9/mcp)\")))\n2026-11-13T00:17:12.347777Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when Client(HttpRequest(HttpRequest(\"http/request failed: error sending request for url (http://127.0.0.1:9/mcp)\")))\n2026-11-13T00:17:12.348258Z ERROR codex_core::session: Failed to create session: required MCP servers failed to initialize: tarsee: handshaking with MCP server failed: Send message error Transport [codex_rmcp_client::tool_list_changes::ToolListChanges<codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>>] error: Client error: HTTP request failed: http/request failed: error sending request for url (http://127.0.0.1:9/mcp), when send initialize request: Send message error Transport [codex_rmcp_client::tool_list_changes::ToolListChanges<codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>>] error: Client error: HTTP request failed: http/request failed: error sending request for url (http://127.0.0.1:9/mcp), when send initialize request\nError: thread/start: thread/start failed: error creating thread: Fatal error: Failed to initialize session: required MCP servers failed to initialize: tarsee: handshaking with MCP server failed: Send message error Transport [codex_rmcp_client::tool_list_changes::ToolListChanges<codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>>] error: Client error: HTTP request failed: http/request failed: error sending request for url (http://127.0.0.1:9/mcp), when send initialize request: Send message error Transport [codex_rmcp_client::tool_list_changes::ToolListChanges<codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>>] error: Client error: HTTP request failed: http/request failed: error sending request for url (http://127.0.0.1:9/mcp), when send initialize request (code -32603)\n",
+    "whatTheSdkThrows": "Codex Exec exited with code 1: Reading prompt from stdin...\n2026-11-13T00:17:09.037218Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when Client(HttpRequest(HttpRequest(\"http/request failed: error sending request for url (http://127.0.0.1:9/mcp)\")))\n2026-11-13T00:17:10.320452Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when Client(HttpRequest(HttpRequest(\"http/request failed: error sending request for url (http://127.0.0.1:9/mcp)\")))\n2026-11-13T00:17:12.347777Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when Client(HttpRequest(HttpRequest(\"http/request failed: error sending request for url (http://127.0.0.1:9/mcp)\")))\n2026-11-13T00:17:12.348258Z ERROR codex_core::session: Failed to create session: required MCP servers failed to initialize: tarsee: handshaking with MCP server failed: Send message error Transport [codex_rmcp_client::tool_list_changes::ToolListChanges<codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>>] error: Client error: HTTP request failed: http/request failed: error sending request for url (http://127.0.0.1:9/mcp), when send initialize request: Send message error Transport [codex_rmcp_client::tool_list_changes::ToolListChanges<codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>>] error: Client error: HTTP request failed: http/request failed: error sending request for url (http://127.0.0.1:9/mcp), when send initialize request\nError: thread/start: thread/start failed: error creating thread: Fatal error: Failed to initialize session: required MCP servers failed to initialize: tarsee: handshaking with MCP server failed: Send message error Transport [codex_rmcp_client::tool_list_changes::ToolListChanges<codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>>] error: Client error: HTTP request failed: http/request failed: error sending request for url (http://127.0.0.1:9/mcp), when send initialize request: Send message error Transport [codex_rmcp_client::tool_list_changes::ToolListChanges<codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>>] error: Client error: HTTP request failed: http/request failed: error sending request for url (http://127.0.0.1:9/mcp), when send initialize request (code -32603)\n",
+    "requestsToTheModel": 0
+  },
+  "theServerRefusesTheToken": {
+    "exitCode": 1,
+    "ms": 7104,
+    "stdoutLines": [],
+    "stderr": "Reading prompt from stdin...\n2026-11-13T00:17:21.203959Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: \"Bearer realm=\\\"tarsee\\\"\" })\n2026-11-13T00:17:21.205740Z ERROR codex_core::session: Failed to create session: required MCP servers failed to initialize: tarsee: handshaking with MCP server failed: Send message error Transport [codex_rmcp_client::tool_list_changes::ToolListChanges<codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>>] error: Auth required, when send initialize request: Send message error Transport [codex_rmcp_client::tool_list_changes::ToolListChanges<codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>>] error: Auth required, when send initialize request\nError: thread/start: thread/start failed: error creating thread: Fatal error: Failed to initialize session: required MCP servers failed to initialize: tarsee: handshaking with MCP server failed: Send message error Transport [codex_rmcp_client::tool_list_changes::ToolListChanges<codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>>] error: Auth required, when send initialize request: Send message error Transport [codex_rmcp_client::tool_list_changes::ToolListChanges<codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>>] error: Auth required, when send initialize request (code -32603)\n",
+    "whatTheSdkThrows": "Codex Exec exited with code 1: Reading prompt from stdin...\n2026-11-13T00:17:21.203959Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: \"Bearer realm=\\\"tarsee\\\"\" })\n2026-11-13T00:17:21.205740Z ERROR codex_core::session: Failed to create session: required MCP servers failed to initialize: tarsee: handshaking with MCP server failed: Send message error Transport [codex_rmcp_client::tool_list_changes::ToolListChanges<codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>>] error: Auth required, when send initialize request: Send message error Transport [codex_rmcp_client::tool_list_changes::ToolListChanges<codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>>] error: Auth required, when send initialize request\nError: thread/start: thread/start failed: error creating thread: Fatal error: Failed to initialize session: required MCP servers failed to initialize: tarsee: handshaking with MCP server failed: Send message error Transport [codex_rmcp_client::tool_list_changes::ToolListChanges<codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>>] error: Auth required, when send initialize request: Send message error Transport [codex_rmcp_client::tool_list_changes::ToolListChanges<codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>>] error: Auth required, when send initialize request (code -32603)\n",
+    "requestsToTheMcpServer": [
+      {
+        "n": 1,
+        "at_ms": 6139,
+        "method": "POST",
+        "path": "/mcp",
+        "httpVersion": "1.1",
+        "headers": [
+          [
+            "user-agent",
+            "codex-mcp-client/0.167.0"
+          ],
+          [
+            "accept",
+            "text/event-stream, application/json"
+          ],
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "authorization",
+            "Bearer <MCP_TOKEN>"
+          ],
+          [
+            "host",
+            "127.0.0.1:<PORT>"
+          ],
+          [
+            "content-length",
+            "217"
+          ]
+        ],
+        "body": {
+          "jsonrpc": "2.0",
+          "id": 0,
+          "method": "initialize",
+          "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {
+              "elicitation": {
+                "form": {},
+                "url": {}
+              }
+            },
+            "clientInfo": {
+              "name": "codex-mcp-client",
+              "title": "Codex",
+              "version": "0.167.0"
+            }
+          }
+        },
+        "answer": {
+          "status": 401,
+          "headers": {
+            "Content-Type": "application/json",
+            "Cache-Control": "no-store",
+            "WWW-Authenticate": "Bearer realm=\"tarsee\""
+          },
+          "body": {
+            "jsonrpc": "2.0",
+            "error": {
+              "code": -32000,
+              "message": "This needs a live grant's token."
+            },
+            "id": null
+          }
+        }
+      }
+    ],
+    "requestsToTheModel": 0
+  },
+  "theTokenVariableIsNotSet": {
+    "exitCode": 1,
+    "ms": 1327,
+    "stdoutLines": [],
+    "stderr": "Reading prompt from stdin...\n2026-11-13T00:17:22.601630Z ERROR codex_core::session: Failed to create session: required MCP servers failed to initialize: tarsee: Environment variable TARSEE_MCP_TOKEN for MCP server 'tarsee' is not set\nError: thread/start: thread/start failed: error creating thread: Fatal error: Failed to initialize session: required MCP servers failed to initialize: tarsee: Environment variable TARSEE_MCP_TOKEN for MCP server 'tarsee' is not set (code -32603)\n",
+    "whatTheSdkThrows": "Codex Exec exited with code 1: Reading prompt from stdin...\n2026-11-13T00:17:22.601630Z ERROR codex_core::session: Failed to create session: required MCP servers failed to initialize: tarsee: Environment variable TARSEE_MCP_TOKEN for MCP server 'tarsee' is not set\nError: thread/start: thread/start failed: error creating thread: Fatal error: Failed to initialize session: required MCP servers failed to initialize: tarsee: Environment variable TARSEE_MCP_TOKEN for MCP server 'tarsee' is not set (code -32603)\n",
+    "requestsToTheMcpServer": [],
+    "requestsToTheModel": 0
+  }
+}

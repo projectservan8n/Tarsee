@@ -1,0 +1,355 @@
+{
+ "name": "checked-01-sdk-arguments",
+ "what": "The real SDK called directly with every option it has, and with the awkward values a config can hold: the argument list in order, what reaches stdin, the environment. Then what the SDK refuses before it starts anything, a program that is not there, and two turns on one thread object.",
+ "made_with": {
+  "sdk": "@openai/codex-sdk 0.167.0, called directly",
+  "stub": "scripts/checked-stub-exec.js.txt, run by node itself as the program",
+  "script": "scripts/checked-capture.mjs.txt",
+  "platform": "win32, Node 22.18"
+ },
+ "everyOption": {
+  "given": "scenario a1 of the script: config with strings, numbers, booleans, arrays, tables, keys that look like integers, a dotted key and a key with a space; configOverrides; baseUrl; apiKey beside an env that has CODEX_API_KEY; every thread and turn option; two texts and two pictures",
+  "args": [
+   "exec",
+   "--experimental-json",
+   "--config",
+   "2=\"second\"",
+   "--config",
+   "10=\"integer-like key written first by JS\"",
+   "--config",
+   "s_plain=\"hello\"",
+   "--config",
+   "s_quotes=\"say \\\"hi\\\" to C:\\\\Users\\\\me\"",
+   "--config",
+   "s_nl=\"one\\ntwo\\ttab\\rcr\\bbs\\fff\"",
+   "--config",
+   "s_unicode=\"café ☃ 😀\"",
+   "--config",
+   "s_control=\"bell\\u0007esc\\u001bdelnells ps \"",
+   "--config",
+   "s_empty=\"\"",
+   "--config",
+   "s_lone_surrogate=\"x\\ud83dy\"",
+   "--config",
+   "n_int=42",
+   "--config",
+   "n_neg=-7",
+   "--config",
+   "n_float=0.85",
+   "--config",
+   "n_big=1e+21",
+   "--config",
+   "n_small=1e-7",
+   "--config",
+   "n_negzero=0",
+   "--config",
+   "n_bigint_like=9007199254740992",
+   "--config",
+   "b_true=true",
+   "--config",
+   "b_false=false",
+   "--config",
+   "a_empty=[]",
+   "--config",
+   "a_str=[\"a\", \"b c\", \"d\\\"e\"]",
+   "--config",
+   "a_mixed=[1, \"two\", [3, 4], true]",
+   "--config",
+   "a_tables=[{name = \"first\", n = 1}, {\"key with space\" = \"v\", nested = {deep = true}}]",
+   "--config",
+   "t_empty={}",
+   "--config",
+   "t_nested.a.b.c=1",
+   "--config",
+   "t_nested.dotted.key=\"raw\"",
+   "--config",
+   "t_nested.spaced key=\"raw\"",
+   "--config",
+   "t_nested.deep_empty={}",
+   "--config",
+   "raw_one=1",
+   "--config",
+   "raw.two=\"x y\"",
+   "--config",
+   "openai_base_url=\"http://127.0.0.1:1/v1\"",
+   "--model",
+   "the-model",
+   "--thread-source",
+   "user",
+   "--sandbox",
+   "workspace-write",
+   "--cd",
+   "C:\\work dir\\ws",
+   "--add-dir",
+   "C:\\a b",
+   "--add-dir",
+   "D:\\c",
+   "--skip-git-repo-check",
+   "--output-schema",
+   "<TMP>\\codex-output-schema-<RANDOM>\\schema.json",
+   "--cyber-access-program",
+   "prog",
+   "--config",
+   "model_reasoning_effort=\"xhigh\"",
+   "--config",
+   "sandbox_workspace_write.network_access=false",
+   "--config",
+   "web_search=\"cached\"",
+   "--config",
+   "approval_policy=\"on-request\"",
+   "--image",
+   "C:\\p q\\one.png",
+   "--image",
+   "two.jpg"
+  ],
+  "stdin": "first part\n\nsecond part",
+  "envNames": [
+   "CODEX_API_KEY",
+   "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+   "HOMEDRIVE",
+   "HOMEPATH",
+   "LOGONSERVER",
+   "ONLY",
+   "PATH",
+   "SYSTEMDRIVE",
+   "SYSTEMROOT",
+   "TEMP",
+   "USERDOMAIN",
+   "USERNAME",
+   "USERPROFILE",
+   "WINDIR"
+  ],
+  "envValues": {
+   "CODEX_API_KEY": "from-apiKey",
+   "CODEX_INTERNAL_ORIGINATOR_OVERRIDE": "codex_sdk_ts",
+   "ONLY": "this"
+  },
+  "cwdIsTheCallersOwn": true
+ },
+ "resumed": {
+  "given": "resumeThread(id) with threadSource, sandboxMode read-only, skipGitRepoCheck false, networkAccessEnabled true, webSearchEnabled false, no additional directories, an env that has its own CODEX_INTERNAL_ORIGINATOR_OVERRIDE, and an input of one picture and no text",
+  "args": [
+   "exec",
+   "--experimental-json",
+   "--sandbox",
+   "read-only",
+   "--config",
+   "sandbox_workspace_write.network_access=true",
+   "--config",
+   "web_search=\"disabled\"",
+   "resume",
+   "01a1c000-0000-7000-8000-0000000000cc",
+   "--image",
+   "only.png"
+  ],
+  "stdinBytes": 0,
+  "CODEX_INTERNAL_ORIGINATOR_OVERRIDE": "mine"
+ },
+ "webSearchEnabledTrue_originatorEmpty": {
+  "given": "webSearchEnabled true; env has CODEX_INTERNAL_ORIGINATOR_OVERRIDE set to an empty string; input an empty string",
+  "args": [
+   "exec",
+   "--experimental-json",
+   "--config",
+   "web_search=\"live\""
+  ],
+  "stdinBytes": 0,
+  "CODEX_INTERNAL_ORIGINATOR_OVERRIDE": "codex_sdk_ts"
+ },
+ "noOptions": {
+  "args": [
+   "exec",
+   "--experimental-json"
+  ],
+  "namesTheCallerHasThatTheChildLacks": [],
+  "namesTheChildHasThatTheCallerLacks": [
+   "CODEX_INTERNAL_ORIGINATOR_OVERRIDE"
+  ]
+ },
+ "emptyEnv": {
+  "given": "env: {}",
+  "childEnvNames": [
+   "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+   "HOMEDRIVE",
+   "HOMEPATH",
+   "LOGONSERVER",
+   "PATH",
+   "SYSTEMDRIVE",
+   "SYSTEMROOT",
+   "TEMP",
+   "USERDOMAIN",
+   "USERNAME",
+   "USERPROFILE",
+   "WINDIR"
+  ]
+ },
+ "lowercaseNames": {
+  "given": "env: { path, systemroot, Temp }",
+  "childEnvNames": [
+   "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+   "HOMEDRIVE",
+   "HOMEPATH",
+   "LOGONSERVER",
+   "SYSTEMDRIVE",
+   "Temp",
+   "USERDOMAIN",
+   "USERNAME",
+   "USERPROFILE",
+   "WINDIR",
+   "path",
+   "systemroot"
+  ]
+ },
+ "programMissing": {
+  "threw": {
+   "name": "Error",
+   "message": "spawn <SCRATCH>\\runs\\a12-missing\\no-such-codex.exe ENOENT",
+   "code": "ENOENT",
+   "cause": null
+  },
+  "errno": -4058,
+  "syscall": "spawn <SCRATCH>\\runs\\a12-missing\\no-such-codex.exe",
+  "yielded": []
+ },
+ "twoTurnsOnOneThreadObject": {
+  "idBefore": null,
+  "idAfter": "01a1c000-0000-7000-8000-0000000000cc",
+  "firstArgs": [
+   "exec",
+   "--experimental-json",
+   "--model",
+   "m",
+   "--thread-source",
+   "user"
+  ],
+  "secondArgs": [
+   "exec",
+   "--experimental-json",
+   "--model",
+   "m",
+   "resume",
+   "01a1c000-0000-7000-8000-0000000000cc"
+  ],
+  "differentPids": true
+ },
+ "refusedByTheSdk": {
+  "null_value": {
+   "threw": {
+    "name": "Error",
+    "message": "Codex config override at a.b cannot be null",
+    "code": null,
+    "cause": null
+   },
+   "started": false,
+   "args": null
+  },
+  "nan": {
+   "threw": {
+    "name": "Error",
+    "message": "Codex config override at n must be a finite number",
+    "code": null,
+    "cause": null
+   },
+   "started": false,
+   "args": null
+  },
+  "infinity": {
+   "threw": {
+    "name": "Error",
+    "message": "Codex config override at n must be a finite number",
+    "code": null,
+    "cause": null
+   },
+   "started": false,
+   "args": null
+  },
+  "empty_key": {
+   "threw": {
+    "name": "Error",
+    "message": "Codex config override keys must be non-empty strings",
+    "code": null,
+    "cause": null
+   },
+   "started": false,
+   "args": null
+  },
+  "empty_key_in_inline_table": {
+   "threw": {
+    "name": "Error",
+    "message": "Codex config override keys must be non-empty strings",
+    "code": null,
+    "cause": null
+   },
+   "started": false,
+   "args": null
+  },
+  "function_value": {
+   "threw": {
+    "name": "Error",
+    "message": "Unsupported Codex config override value at f: function",
+    "code": null,
+    "cause": null
+   },
+   "started": false,
+   "args": null
+  },
+  "bigint_value": {
+   "threw": {
+    "name": "Error",
+    "message": "Unsupported Codex config override value at f: bigint",
+    "code": null,
+    "cause": null
+   },
+   "started": false,
+   "args": null
+  },
+  "config_is_array": {
+   "threw": {
+    "name": "Error",
+    "message": "Codex config overrides must be a plain object",
+    "code": null,
+    "cause": null
+   },
+   "started": false,
+   "args": null
+  },
+  "config_is_string": {
+   "threw": {
+    "name": "Error",
+    "message": "Codex config overrides must be a plain object",
+    "code": null,
+    "cause": null
+   },
+   "started": false,
+   "args": null
+  },
+  "output_schema_not_object": {
+   "threw": {
+    "name": "Error",
+    "message": "outputSchema must be a plain JSON object",
+    "code": null,
+    "cause": null
+   },
+   "started": false,
+   "args": null
+  },
+  "empty_config_object": {
+   "threw": null,
+   "started": true,
+   "args": [
+    "exec",
+    "--experimental-json"
+   ]
+  },
+  "date_value": {
+   "threw": null,
+   "started": true,
+   "args": [
+    "exec",
+    "--experimental-json",
+    "--config",
+    "d={}"
+   ]
+  }
+ }
+}

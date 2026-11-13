@@ -1,0 +1,203 @@
+{
+  "name": "sdk-02-every-option",
+  "what": "Every option the SDK has at once, on a new thread, in the order the SDK emits them: config, configOverrides (raw), baseUrl, model, threadSource, sandboxMode, workingDirectory, additionalDirectories, skipGitRepoCheck, outputSchema, cyberAccessProgram, modelReasoningEffort, networkAccessEnabled, webSearchMode, approvalPolicy, images; apiKey as CODEX_API_KEY. The input is two text parts and a picture.",
+  "made_with": {
+    "sdk": "@openai/codex-sdk 0.167.0, called directly",
+    "platform": "win32"
+  },
+  "sdk": {
+    "new Codex(options)": {
+      "env": {
+        "FROM_ENV_OPTION": "the env option",
+        "CODEX_API_KEY": "overwritten by apiKey"
+      },
+      "apiKey": "<API_KEY>",
+      "baseUrl": "http://127.0.0.1:9/v1",
+      "config": {
+        "a": {
+          "b": 1
+        }
+      },
+      "configOverrides": [
+        "raw.override=\"passed unchanged\"",
+        "another=1"
+      ],
+      "codexPathOverride": "<CODEX_BIN>"
+    },
+    "thread": {
+      "method": "startThread",
+      "threadOptions": {
+        "model": "some-model",
+        "threadSource": "capture",
+        "sandboxMode": "workspace-write",
+        "workingDirectory": "<WORKSPACE>",
+        "additionalDirectories": [
+          "<EXTRA_DIR>",
+          "<WORKSPACE>"
+        ],
+        "skipGitRepoCheck": true,
+        "modelReasoningEffort": "minimal",
+        "networkAccessEnabled": false,
+        "webSearchMode": "cached",
+        "webSearchEnabled": true,
+        "approvalPolicy": "on-request"
+      }
+    },
+    "runStreamed(input, turnOptions)": {
+      "input": [
+        {
+          "type": "text",
+          "text": "first part"
+        },
+        {
+          "type": "local_image",
+          "path": "<IMAGE_FILE>"
+        },
+        {
+          "type": "text",
+          "text": "second part"
+        }
+      ],
+      "turnOptions": {
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "answer": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "answer"
+          ],
+          "additionalProperties": false
+        },
+        "cyberAccessProgram": "standard"
+      }
+    },
+    "callerProcessEnvNames": [
+      "COMSPEC",
+      "FROM_PROCESS_ENV",
+      "PATH",
+      "SYSTEMDRIVE",
+      "SYSTEMROOT",
+      "TEMP",
+      "TMP",
+      "TMPDIR"
+    ]
+  },
+  "child": {
+    "program": "<CODEX_BIN>",
+    "argv": [
+      "exec",
+      "--experimental-json",
+      "--config",
+      "a.b=1",
+      "--config",
+      "raw.override=\"passed unchanged\"",
+      "--config",
+      "another=1",
+      "--config",
+      "openai_base_url=\"http://127.0.0.1:9/v1\"",
+      "--model",
+      "some-model",
+      "--thread-source",
+      "capture",
+      "--sandbox",
+      "workspace-write",
+      "--cd",
+      "<WORKSPACE>",
+      "--add-dir",
+      "<EXTRA_DIR>",
+      "--add-dir",
+      "<WORKSPACE>",
+      "--skip-git-repo-check",
+      "--output-schema",
+      "<TMP>\\codex-output-schema-<RANDOM>\\schema.json",
+      "--cyber-access-program",
+      "standard",
+      "--config",
+      "model_reasoning_effort=\"minimal\"",
+      "--config",
+      "sandbox_workspace_write.network_access=false",
+      "--config",
+      "web_search=\"cached\"",
+      "--config",
+      "approval_policy=\"on-request\"",
+      "--image",
+      "<IMAGE_FILE>"
+    ],
+    "cwd": "<CALLER_CWD>",
+    "envNames": [
+      "CODEX_API_KEY",
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+      "FROM_ENV_OPTION",
+      "PATH",
+      "SYSTEMDRIVE",
+      "SYSTEMROOT",
+      "TEMP"
+    ],
+    "envValues": {
+      "CODEX_API_KEY": "<API_KEY>",
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE": "codex_sdk_ts",
+      "FROM_ENV_OPTION": "the env option",
+      "PATH": "C:\\WINDOWS\\system32;C:\\WINDOWS"
+    },
+    "envNamesNotInEnvOption": [
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+      "PATH",
+      "SYSTEMDRIVE",
+      "SYSTEMROOT",
+      "TEMP"
+    ],
+    "stdin": {
+      "text": "first part\n\nsecond part",
+      "bytes": 23,
+      "chunks": [
+        {
+          "at_ms": 0,
+          "bytes": 23
+        }
+      ],
+      "eof_at_ms": 1
+    }
+  },
+  "outputSchemaFile": {
+    "path": "<TMP>\\codex-output-schema-<RANDOM>\\schema.json",
+    "content": "{\"type\":\"object\",\"properties\":{\"answer\":{\"type\":\"string\"}},\"required\":[\"answer\"],\"additionalProperties\":false}",
+    "existsAfterTheTurn": false
+  },
+  "stub": {
+    "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"01a1c000-0000-7000-8000-0000000000bb\"}\n{\"type\":\"turn.started\"}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":10,\"cached_input_tokens\":0,\"output_tokens\":2,\"reasoning_output_tokens\":0}}\n",
+    "stderr": "",
+    "exitCode": 0,
+    "sleepMsBeforeExit": 0
+  },
+  "sdkYielded": [
+    {
+      "type": "thread.started",
+      "thread_id": "01a1c000-0000-7000-8000-0000000000bb"
+    },
+    {
+      "type": "turn.started"
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_0",
+        "type": "agent_message",
+        "text": "ok"
+      }
+    },
+    {
+      "type": "turn.completed",
+      "usage": {
+        "input_tokens": 10,
+        "cached_input_tokens": 0,
+        "output_tokens": 2,
+        "reasoning_output_tokens": 0,
+        "cache_write_input_tokens": 0
+      }
+    }
+  ],
+  "sdkThrew": null
+}

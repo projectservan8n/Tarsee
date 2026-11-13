@@ -1,0 +1,37 @@
+{
+  "description": "How a failed tool call on the HTTP MCP server comes out on the program's stdout: the user message's tool_result has is_error true, and its content is a plain string (a successful call's content is an array of blocks).",
+  "cases": [
+    {
+      "case": "tools/call answers a result with isError: true",
+      "exit_code": 0,
+      "user_message_on_stdout": {
+        "content": [
+          {
+            "type": "tool_result",
+            "content": "Error: Either 'prompt' or 'action' is required. Nothing was saved.",
+            "is_error": true,
+            "tool_use_id": "toolu_err_1"
+          }
+        ],
+        "tool_use_result": "Error: Error: Either 'prompt' or 'action' is required. Nothing was saved."
+      },
+      "result": "Noted."
+    },
+    {
+      "case": "tools/call answers a JSON-RPC error",
+      "exit_code": 0,
+      "user_message_on_stdout": {
+        "content": [
+          {
+            "type": "tool_result",
+            "content": "Invalid arguments for tool tarsee_schedule_task",
+            "is_error": true,
+            "tool_use_id": "toolu_err_1"
+          }
+        ],
+        "tool_use_result": "Error: Invalid arguments for tool tarsee_schedule_task"
+      },
+      "result": "Noted."
+    }
+  ]
+}

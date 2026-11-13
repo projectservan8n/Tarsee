@@ -1,0 +1,94 @@
+// The whole recipe once, from Rust, with the standard library only: start the real claude program the way the SDK
+// does, write the initialize request and a user message, read stdout to the result, close stdin, wait for the exit.
+// It is here to show two things the Node captures cannot: that Rust's own argument quoting on Windows hands the
+// program the --mcp-config JSON intact, and that a process started with a cleared environment works.
+//
+//   rust-probe <claude program> <an empty home folder> <a working folder>
+//
+// The API address is a closed loopback port and the token is made up, so the turn ends in a connection error:
+// nothing leaves the machine. Prints every stdout line's type, the mcp_servers the program reports, and the exit code.
+use std::io::{BufRead, BufReader, Write};
+use std::process::{Command, Stdio};
+
+fn field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+    let at = line.find(key)? + key.len();
+    let rest = &line[at..];
+    let end = rest.find(|c| c == ',' || c == '}').unwrap_or(rest.len());
+    Some(rest[..end].trim_matches('"'))
+}
+
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    let (program, home, cwd) = (&args[1], &args[2], &args[3]);
+    let mcp = r#"{"mcpServers":{"tarsee":{"type":"http","url":"http://127.0.0.1:9/mcp","headers":{"Authorization":"Bearer ${TARSEE_MCP_TOKEN}"},"alwaysLoad":true}}}"#;
+    let mut cmd = Command::new(program);
+    cmd.args(["--output-format", "stream-json", "--verbose", "--input-format", "stream-json"])
+        .arg("--max-turns=50")
+        .arg("--model=deepseek-flash[1m]")
+        .arg("--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*")
+        .arg("--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*")
+        .args(["--mcp-config", mcp])
+        .arg("--setting-sources=project")
+        .arg("--strict-mcp-config")
+        .arg("--permission-mode=bypassPermissions")
+        .arg("--allow-dangerously-skip-permissions")
+        .arg("--include-partial-messages")
+        .current_dir(cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env_clear();
+    for name in ["PATH", "SystemRoot", "TEMP", "TMP", "COMSPEC", "PATHEXT", "windir", "SystemDrive"] {
+        if let Ok(v) = std::env::var(name) {
+            cmd.env(name, v);
+        }
+    }
+    cmd.env("USERPROFILE", home)
+        .env("HOME", home)
+        .env("CLAUDE_CONFIG_DIR", format!("{home}/.claude"))
+        .env("ANTHROPIC_BASE_URL", "http://127.0.0.1:9")
+        .env("ANTHROPIC_AUTH_TOKEN", format!("sk-{}", "test-not-a-key-000000000000000000"))
+        .env("ANTHROPIC_API_KEY", "")
+        .env("TARSEE_MCP_TOKEN", "made-up-token")
+        .env("CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST", "1")
+        .env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
+        .env("CLAUDE_CODE_MAX_RETRIES", "0");
+    let mut child = cmd.spawn().expect("start the program");
+    let mut stdin = child.stdin.take().unwrap();
+    let stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut stderr = child.stderr.take().unwrap();
+    let errors = std::thread::spawn(move || {
+        let mut s = String::new();
+        std::io::Read::read_to_string(&mut stderr, &mut s).ok();
+        s
+    });
+
+    stdin.write_all(b"{\"request_id\":\"init1\",\"type\":\"control_request\",\"request\":{\"subtype\":\"initialize\",\"systemPrompt\":[\"You are a test.\"],\"systemPromptSnapshot\":false}}\n").unwrap();
+    stdin.write_all(b"{\"type\":\"user\",\"session_id\":\"\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"say hi\"}]},\"parent_tool_use_id\":null}\n").unwrap();
+    stdin.flush().unwrap();
+
+    let mut stdin = Some(stdin);
+    for line in stdout.lines() {
+        let line = line.unwrap();
+        if line.trim().is_empty() {
+            continue;
+        }
+        let kind = field(&line, "\"type\":").unwrap_or("?");
+        let sub = field(&line, "\"subtype\":").unwrap_or("");
+        println!("stdout: {kind} {sub}");
+        if kind == "system" && sub == "init" {
+            let at = line.find("\"mcp_servers\":").unwrap();
+            let end = line[at..].find(']').unwrap();
+            println!("  {}", &line[at..at + end + 1]);
+        }
+        if kind == "result" {
+            println!("  is_error: {}", field(&line, "\"is_error\":").unwrap_or("?"));
+            let at = line.find("\"result\":").map(|i| &line[i..(i + 110).min(line.len())]).unwrap_or("");
+            println!("  {at}");
+            drop(stdin.take()); // close stdin: the turn is over
+        }
+    }
+    let status = child.wait().unwrap();
+    println!("exit code: {:?}", status.code());
+    println!("stderr: {:?}", errors.join().unwrap());
+}

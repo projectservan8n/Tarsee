@@ -1,0 +1,137 @@
+// Drives the REAL bundled claude.exe directly (no SDK), in an isolated home, against a loopback fake of the Messages
+// API. Nothing leaves the machine, no real key or sign-in is used.
+//
+//   const r = await drive({ name, args, env, stdin: [...objects or strings], onMessage(msg, api), endInputAfterResult })
+//   r = { argv, exitCode, signal, stdout: [{t, msg|raw}], stderr, apiRequests }
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+// Where things are comes from the environment, so nothing here names a machine:
+//   CAPTURE_SCRATCH       an empty scratch folder for homes, workspaces and records (never inside a repository)
+//   TARSEE_NODE_PROJECT   the Node checkout of Tarsee with node_modules installed (read only)
+function need(name) {
+  const v = String(process.env[name] || "").trim().split("\\").join("/").replace(/[/]+$/, "");
+  if (!v) throw new Error(`set ${name} (see tests/fixtures/claude-cli/README.md)`);
+  return v;
+}
+export const SCRATCH = need("CAPTURE_SCRATCH");
+export const NODE_PROJECT = need("TARSEE_NODE_PROJECT");
+export const CLAUDE_EXE = `${NODE_PROJECT}/node_modules/@anthropic-ai/claude-agent-sdk-win32-x64/claude.exe`;
+export const FAKE_TOKEN = "sk-" + "test-not-a-key-000000000000000000";
+
+const { startFakeAnthropic } = await import(pathToFileURL(`${NODE_PROJECT}/test/fixtures/fake-anthropic.js`).href);
+export { startFakeAnthropic };
+
+/** A clean environment: nothing of this machine's sign-in, an isolated home and config folder. */
+export function cleanEnv(home, extra = {}) {
+  const keep = ["PATH", "Path", "SystemRoot", "SYSTEMROOT", "TEMP", "TMP", "COMSPEC", "ComSpec", "PATHEXT", "windir", "SystemDrive", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "OS"];
+  const env = {};
+  for (const k of keep) if (process.env[k] != null) env[k] = process.env[k];
+  const h = path.win32.normalize(home);
+  fs.mkdirSync(h, { recursive: true });
+  return {
+    ...env,
+    USERPROFILE: h,
+    HOME: h,
+    APPDATA: path.win32.join(h, "AppData", "Roaming"),
+    LOCALAPPDATA: path.win32.join(h, "AppData", "Local"),
+    CLAUDE_CONFIG_DIR: path.win32.join(h, ".claude"),
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+    DISABLE_AUTOUPDATER: "1",
+    CLAUDE_CODE_MAX_RETRIES: "0",
+    ...extra,
+  };
+}
+
+/** The gateway-style credential block Tarsee uses (a bearer token, no API key), aimed at the fake. */
+export function gatewayEnv(home, fakeUrl, extra = {}) {
+  return cleanEnv(home, {
+    ANTHROPIC_BASE_URL: fakeUrl,
+    ANTHROPIC_AUTH_TOKEN: FAKE_TOKEN,
+    ANTHROPIC_API_KEY: "",
+    CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1",
+    CLAUDE_CODE_ENTRYPOINT: "sdk-ts",
+    ...extra,
+  });
+}
+
+export async function drive({ name, args, env, cwd, stdin = [], onMessage = null, endInputAfterResult = true, timeoutMs = 60_000, exe = CLAUDE_EXE }) {
+  const t0 = Date.now();
+  const t = () => Date.now() - t0;
+  fs.mkdirSync(cwd, { recursive: true });
+  const child = spawn(exe, args, { cwd, env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+  const out = [];
+  const sent = [];
+  let stderr = "";
+  let buf = "";
+  let ended = false;
+  const api = {
+    t,
+    send(obj) {
+      const line = typeof obj === "string" ? obj : JSON.stringify(obj);
+      sent.push({ t: t(), line: typeof obj === "string" ? obj : obj });
+      try { child.stdin.write(line + "\n"); } catch (e) { sent.push({ t: t(), error: String(e) }); }
+    },
+    endInput() { if (!ended) { ended = true; sent.push({ t: t(), event: "stdin-end" }); try { child.stdin.end(); } catch { /* gone */ } } },
+    kill(sig) { sent.push({ t: t(), event: `kill ${sig || "SIGTERM"}` }); child.kill(sig); },
+    child,
+  };
+  child.stdin.on("error", (e) => sent.push({ t: t(), event: `stdin-error ${e.code || e.message}` }));
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (d) => {
+    buf += d;
+    let i;
+    while ((i = buf.indexOf("\n")) !== -1) {
+      const line = buf.slice(0, i); buf = buf.slice(i + 1);
+      if (!line.trim()) continue;
+      let msg = null;
+      try { msg = JSON.parse(line); } catch { out.push({ t: t(), raw: line }); continue; }
+      out.push({ t: t(), msg });
+      try { onMessage?.(msg, api); } catch (e) { out.push({ t: t(), raw: `onMessage threw: ${e?.stack || e}` }); }
+      if (endInputAfterResult && msg.type === "result") api.endInput();
+    }
+  });
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (d) => { stderr += d; });
+  for (const s of stdin) api.send(s);
+  const timer = setTimeout(() => { sent.push({ t: t(), event: "driver-timeout-kill" }); child.kill(); }, timeoutMs);
+  const [exitCode, signal] = await new Promise((resolve) => child.on("exit", (c, s) => resolve([c, s])));
+  clearTimeout(timer);
+  await new Promise((r) => setTimeout(r, 100));
+  if (buf.trim()) out.push({ t: t(), raw: buf });
+  const rec = { name, argv: args, cwd, exitCode, signal, exitAt: t(), sent, stdout: out, stderr };
+  if (name) fs.writeFileSync(`${SCRATCH}/real/${name}.json`, JSON.stringify(rec, null, 2));
+  return rec;
+}
+
+let rid = 0;
+export const initRequest = (extra = {}) => ({ request_id: `init${++rid}`, type: "control_request", request: { subtype: "initialize", ...extra } });
+export const userText = (text) => ({ type: "user", session_id: "", message: { role: "user", content: [{ type: "text", text }] }, parent_tool_use_id: null });
+
+/** Tarsee's base argv for a turn (what the SDK builds from claude-code.js's options), minus per-run parts. */
+export function baseArgs({ model = "claude-sonnet-4-5", extra = [] } = {}) {
+  return [
+    "--output-format", "stream-json", "--verbose", "--input-format", "stream-json",
+    "--max-turns=50", `--model=${model}`,
+    "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--setting-sources=project", "--strict-mcp-config",
+    "--permission-mode=bypassPermissions", "--allow-dangerously-skip-permissions",
+    "--include-partial-messages",
+    ...extra,
+  ];
+}
+
+/** A compact one-line view of a stdout message for reading a run. */
+export function brief(m) {
+  if (!m) return "";
+  const s = m.type + (m.subtype ? `/${m.subtype}` : "");
+  if (m.type === "stream_event") return `${s} ${m.event?.type}${m.event?.delta ? ` ${JSON.stringify(m.event.delta).slice(0, 80)}` : ""}`;
+  if (m.type === "control_request") return `${s} ${m.request?.subtype} ${JSON.stringify(m.request).slice(0, 200)}`;
+  if (m.type === "control_response") return `${s} ${m.response?.subtype} id=${m.response?.request_id} keys=${Object.keys(m.response?.response || {}).join(",").slice(0, 300)}`;
+  if (m.type === "result") return `${s} is_error=${m.is_error} result=${JSON.stringify(m.result)?.slice(0, 120)} errors=${JSON.stringify(m.errors)}`;
+  if (m.type === "assistant" || m.type === "user") return `${s} ${JSON.stringify(m.message?.content)?.slice(0, 160)} error=${m.error}`;
+  return `${s} keys=${Object.keys(m).join(",")}`;
+}

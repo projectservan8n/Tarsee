@@ -1,0 +1,3 @@
+
+=== s13 the system prompt record: turn 1 and 2 WITHOUT systemPromptSnapshot, turn 3 with false, turn 4 without
+the last system block the API was sent on turns 1 to 4: ["PROMPT A","PROMPT A","PROMPT C","PROMPT A"]

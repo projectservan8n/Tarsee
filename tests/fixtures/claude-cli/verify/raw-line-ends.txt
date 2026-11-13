@@ -1,0 +1,2 @@
+stdout bytes 801 CR count 0 LF count 1 ends with LF true starts with BOM false
+stderr bytes 76 CR count 0 LF count 1 exit 1

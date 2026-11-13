@@ -1,0 +1,76 @@
+// What a Rust std::process::Command does with a turn's argument list and environment on Windows, checked with a
+// launcher compiled for this check (rs/launch.rs). No Node process start is between the launcher and its child.
+import fs from "node:fs";
+import path from "node:path";
+import { execFileSync, spawn } from "node:child_process";
+
+const SCRATCH = path.resolve(process.env.CAPTURE_SCRATCH);
+const LAUNCH = path.join(SCRATCH, "rs", "launch.exe");
+const OUT = path.join(SCRATCH, "out");
+const nul = (list) => Buffer.from(list.map((s) => s + "\0").join(""), "utf8");
+const unnul = (buf) => buf.toString("utf8").split("\0").slice(0, -1);
+
+/** The same, without blocking this process (so servers in it can answer the program). */
+export async function launchAsync(name, spec) {
+  return launch(name, spec, (dir) => new Promise((resolve) => { const c = spawn(LAUNCH, [dir], { stdio: "ignore" }); c.on("close", resolve); c.on("error", resolve); }));
+}
+
+export function launch(name, { program, args = [], env = null, envClear = false, stdin = null, opts = {} }, runner = null) {
+  const dir = path.join(SCRATCH, "runs", `rs-${name}`);
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "program.txt"), program);
+  fs.writeFileSync(path.join(dir, "args.bin"), nul(args));
+  if (env) fs.writeFileSync(path.join(dir, "env.bin"), nul(Object.entries(env).filter(([, v]) => v != null).map(([k, v]) => `${k}=${v}`)));
+  if (stdin != null) fs.writeFileSync(path.join(dir, "stdin.bin"), stdin);
+  fs.writeFileSync(path.join(dir, "opts.txt"), Object.entries({ ...(envClear ? { env_clear: 1 } : {}), ...opts }).map(([k, v]) => `${k}=${v}`).join("\n"));
+  const finish = () => {
+  const text = (n) => { try { return fs.readFileSync(path.join(dir, n), "utf8"); } catch { return null; } };
+  return { dir, result: Object.fromEntries((text("result.txt") ?? "").split("\n").filter(Boolean).map((l) => { const i = l.indexOf("="); return [l.slice(0, i), l.slice(i + 1)]; })), stdout: text("stdout.bin"), stderr: text("stderr.bin") };
+  };
+  if (runner) return runner(dir).then(finish);
+  try { execFileSync(LAUNCH, [dir], { stdio: "ignore", timeout: 120000 }); } catch (e) { /* its own exit code says nothing */ }
+  return finish();
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(SCRATCH, "rust-checks.mjs")) {
+  const out = {};
+  // 1. A turn's argument list, and awkward ones, through Rust's quoting to a Rust program's args_os().
+  const t1 = JSON.parse(fs.readFileSync(path.join(OUT, "t1-openrouter-new.json"), "utf8")).args;
+  const awkward = ["a\"b", "c\\", "d\\\"e", "tab\there", "new\nline", "ends with backslash\\", "\"quoted\"", "%PATH%", "^&|<>()!", "café ☃ 😀", "two  spaces", "back\\\\slashes\\\\\"q", "'single'", "a=b c", "*.txt", "--config", "x\\y z\\", "\\\\server\\share\\"];
+  const given = [...t1, ...awkward];
+  const dump = path.join(SCRATCH, "runs", "rs-dump-args");
+  const r1 = launch("args-round-trip", { program: LAUNCH, args: ["--dump", dump, ...given] });
+  const got = unnul(fs.readFileSync(`${dump}.args`));
+  out.argsRoundTrip = { given: given.length, got: got.length, identical: JSON.stringify(given) === JSON.stringify(got), firstDifference: given.findIndex((g, i) => g !== got[i]), childExit: r1.result.exit_code };
+
+  // 2. env_clear() and nothing else: what the child sees.
+  const dump2 = path.join(SCRATCH, "runs", "rs-dump-env");
+  const r2 = launch("env-clear", { program: LAUNCH, args: ["--dump", dump2], envClear: true });
+  out.envClearNoVariables = { childExit: r2.result.exit_code, childEnv: unnul(fs.readFileSync(`${dump2}.env`)) };
+  const dump3 = path.join(SCRATCH, "runs", "rs-dump-env3");
+  const r3 = launch("env-clear-two", { program: LAUNCH, args: ["--dump", dump3], envClear: true, env: { ONLY_ONE: "x", path: "C:\\lower" } });
+  out.envClearTwoVariables = { childExit: r3.result.exit_code, childEnv: unnul(fs.readFileSync(`${dump3}.env`)) };
+
+  // 3. A command line past Windows' limit.
+  const r4 = launch("too-long", { program: LAUNCH, args: ["--dump", path.join(SCRATCH, "runs", "rs-dump-long"), "x".repeat(40000)] });
+  out.commandLineTooLong = r4.result;
+  const r5 = launch("just-under", { program: LAUNCH, args: ["--dump", path.join(SCRATCH, "runs", "rs-dump-under"), "x".repeat(32000)] });
+  out.commandLine32000 = { result: r5.result, arrived: fs.existsSync(path.join(SCRATCH, "runs", "rs-dump-under.args")) ? unnul(fs.readFileSync(path.join(SCRATCH, "runs", "rs-dump-under.args")))[0].length : null };
+
+  // 4. A program that is not there.
+  out.programMissing = launch("missing", { program: path.join(SCRATCH, "no-such-program.exe") }).result;
+
+  // 5. Child::kill() on a running program (node, sleeping): the exit code Rust then reports.
+  const r6 = launch("kill", { program: process.execPath, args: ["-e", "setTimeout(()=>{},20000)"], opts: { kill_after_ms: 500 } });
+  out.childKill = r6.result;
+
+  // 6. The program exits before it reads a big prompt: what the write to its stdin returns.
+  const r7 = launch("epipe", { program: process.execPath, args: ["-e", "process.exit(2)"], stdin: Buffer.alloc(4 * 1024 * 1024, 0x70) });
+  out.stdinWriteToAProgramThatExited = r7.result;
+  const r8 = launch("epipe-small", { program: process.execPath, args: ["-e", "process.exit(2)"], stdin: Buffer.from("hello") });
+  out.smallStdinWriteToAProgramThatExited = r8.result;
+
+  fs.writeFileSync(path.join(OUT, "rs-command-checks.json"), JSON.stringify(out, null, 1));
+  console.log(JSON.stringify(out, null, 1));
+}

@@ -1,0 +1,466 @@
+{
+  "name": "tarsee-node-endpoint",
+  "description": "The real claude 2.1.319 pointed at Tarsee's own loopback MCP endpoint, the Node src/ai/mcp-http.js (startMcpHttp + grantTurn), through a recording pass-through: every request and the endpoint's answer. The bearer token came from the environment (${TARSEE_MCP_TOKEN}).",
+  "exit_code": 0,
+  "system_init": {
+    "mcp_servers": [
+      {
+        "name": "tarsee",
+        "status": "connected",
+        "source": "dynamic"
+      }
+    ],
+    "tools": [
+      "Bash",
+      "Edit",
+      "Glob",
+      "Grep",
+      "Read",
+      "Write",
+      "mcp__tarsee__tarsee_browser",
+      "mcp__tarsee__tarsee_calculator",
+      "mcp__tarsee__tarsee_configure_email_channel",
+      "mcp__tarsee__tarsee_create_canvas",
+      "mcp__tarsee__tarsee_create_diagram",
+      "mcp__tarsee__tarsee_daily_log",
+      "mcp__tarsee__tarsee_datetime",
+      "mcp__tarsee__tarsee_delete_key",
+      "mcp__tarsee__tarsee_discord_admin",
+      "mcp__tarsee__tarsee_get_key",
+      "mcp__tarsee__tarsee_list_files",
+      "mcp__tarsee__tarsee_list_keys",
+      "mcp__tarsee__tarsee_pdf_read",
+      "mcp__tarsee__tarsee_push_notification",
+      "mcp__tarsee__tarsee_railway",
+      "mcp__tarsee__tarsee_read_file",
+      "mcp__tarsee__tarsee_remember",
+      "mcp__tarsee__tarsee_schedule_task",
+      "mcp__tarsee__tarsee_search_memories",
+      "mcp__tarsee__tarsee_search_memories_deep",
+      "mcp__tarsee__tarsee_send_email_thread",
+      "mcp__tarsee__tarsee_send_file",
+      "mcp__tarsee__tarsee_send_message",
+      "mcp__tarsee__tarsee_set_key",
+      "mcp__tarsee__tarsee_web_fetch",
+      "mcp__tarsee__tarsee_web_search",
+      "mcp__tarsee__tarsee_write_file"
+    ]
+  },
+  "tools_offered_to_the_model_in_each_api_request": [
+    [
+      "Bash",
+      "Edit",
+      "Glob",
+      "Grep",
+      "Read",
+      "Write",
+      "mcp__tarsee__tarsee_browser",
+      "mcp__tarsee__tarsee_calculator",
+      "mcp__tarsee__tarsee_configure_email_channel",
+      "mcp__tarsee__tarsee_create_canvas",
+      "mcp__tarsee__tarsee_create_diagram",
+      "mcp__tarsee__tarsee_daily_log",
+      "mcp__tarsee__tarsee_datetime",
+      "mcp__tarsee__tarsee_delete_key",
+      "mcp__tarsee__tarsee_discord_admin",
+      "mcp__tarsee__tarsee_get_key",
+      "mcp__tarsee__tarsee_list_files",
+      "mcp__tarsee__tarsee_list_keys",
+      "mcp__tarsee__tarsee_pdf_read",
+      "mcp__tarsee__tarsee_push_notification",
+      "mcp__tarsee__tarsee_railway",
+      "mcp__tarsee__tarsee_read_file",
+      "mcp__tarsee__tarsee_remember",
+      "mcp__tarsee__tarsee_schedule_task",
+      "mcp__tarsee__tarsee_search_memories",
+      "mcp__tarsee__tarsee_search_memories_deep",
+      "mcp__tarsee__tarsee_send_email_thread",
+      "mcp__tarsee__tarsee_send_file",
+      "mcp__tarsee__tarsee_send_message",
+      "mcp__tarsee__tarsee_set_key",
+      "mcp__tarsee__tarsee_web_fetch",
+      "mcp__tarsee__tarsee_web_search",
+      "mcp__tarsee__tarsee_write_file"
+    ],
+    [
+      "Bash",
+      "Edit",
+      "Glob",
+      "Grep",
+      "Read",
+      "Write",
+      "mcp__tarsee__tarsee_browser",
+      "mcp__tarsee__tarsee_calculator",
+      "mcp__tarsee__tarsee_configure_email_channel",
+      "mcp__tarsee__tarsee_create_canvas",
+      "mcp__tarsee__tarsee_create_diagram",
+      "mcp__tarsee__tarsee_daily_log",
+      "mcp__tarsee__tarsee_datetime",
+      "mcp__tarsee__tarsee_delete_key",
+      "mcp__tarsee__tarsee_discord_admin",
+      "mcp__tarsee__tarsee_get_key",
+      "mcp__tarsee__tarsee_list_files",
+      "mcp__tarsee__tarsee_list_keys",
+      "mcp__tarsee__tarsee_pdf_read",
+      "mcp__tarsee__tarsee_push_notification",
+      "mcp__tarsee__tarsee_railway",
+      "mcp__tarsee__tarsee_read_file",
+      "mcp__tarsee__tarsee_remember",
+      "mcp__tarsee__tarsee_schedule_task",
+      "mcp__tarsee__tarsee_search_memories",
+      "mcp__tarsee__tarsee_search_memories_deep",
+      "mcp__tarsee__tarsee_send_email_thread",
+      "mcp__tarsee__tarsee_send_file",
+      "mcp__tarsee__tarsee_send_message",
+      "mcp__tarsee__tarsee_set_key",
+      "mcp__tarsee__tarsee_web_fetch",
+      "mcp__tarsee__tarsee_web_search",
+      "mcp__tarsee__tarsee_write_file"
+    ],
+    [
+      "Bash",
+      "Edit",
+      "Glob",
+      "Grep",
+      "Read",
+      "Write",
+      "mcp__tarsee__tarsee_browser",
+      "mcp__tarsee__tarsee_calculator",
+      "mcp__tarsee__tarsee_configure_email_channel",
+      "mcp__tarsee__tarsee_create_canvas",
+      "mcp__tarsee__tarsee_create_diagram",
+      "mcp__tarsee__tarsee_daily_log",
+      "mcp__tarsee__tarsee_datetime",
+      "mcp__tarsee__tarsee_delete_key",
+      "mcp__tarsee__tarsee_discord_admin",
+      "mcp__tarsee__tarsee_get_key",
+      "mcp__tarsee__tarsee_list_files",
+      "mcp__tarsee__tarsee_list_keys",
+      "mcp__tarsee__tarsee_pdf_read",
+      "mcp__tarsee__tarsee_push_notification",
+      "mcp__tarsee__tarsee_railway",
+      "mcp__tarsee__tarsee_read_file",
+      "mcp__tarsee__tarsee_remember",
+      "mcp__tarsee__tarsee_schedule_task",
+      "mcp__tarsee__tarsee_search_memories",
+      "mcp__tarsee__tarsee_search_memories_deep",
+      "mcp__tarsee__tarsee_send_email_thread",
+      "mcp__tarsee__tarsee_send_file",
+      "mcp__tarsee__tarsee_send_message",
+      "mcp__tarsee__tarsee_set_key",
+      "mcp__tarsee__tarsee_web_fetch",
+      "mcp__tarsee__tarsee_web_search",
+      "mcp__tarsee__tarsee_write_file"
+    ]
+  ],
+  "stdout_message_counts": {
+    "control_response": 1,
+    "system/session_state_changed": 2,
+    "system/init": 1,
+    "system/status": 3,
+    "stream_event": 18,
+    "assistant": 3,
+    "user": 2,
+    "result/success": 1
+  },
+  "exchanges": [
+    {
+      "method": "POST",
+      "path": "/mcp",
+      "request_headers": {
+        "accept": "application/json, text/event-stream",
+        "accept-encoding": "identity",
+        "authorization": "Bearer <TOKEN>",
+        "content-type": "application/json",
+        "user-agent": "claude-code/2.1.319 (sdk-ts)",
+        "mcp-method": "server/discover",
+        "mcp-protocol-version": "2026-07-28",
+        "connection": "keep-alive",
+        "host": "127.0.0.1:<PORT>",
+        "content-length": "458"
+      },
+      "request_body": {
+        "jsonrpc": "2.0",
+        "id": "server-discover-probe-1",
+        "method": "server/discover",
+        "params": {
+          "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientInfo": {
+              "name": "claude-code",
+              "title": "Claude Code",
+              "version": "2.1.319",
+              "description": "Anthropic's agentic coding tool",
+              "websiteUrl": "https://claude.com/claude-code"
+            },
+            "io.modelcontextprotocol/clientCapabilities": {
+              "roots": {
+                "listChanged": true
+              },
+              "elicitation": {
+                "form": {},
+                "url": {}
+              }
+            }
+          }
+        }
+      },
+      "status": 400,
+      "response_content_type": "application/json",
+      "response_body": {
+        "jsonrpc": "2.0",
+        "error": {
+          "code": -32000,
+          "message": "Bad Request: Unsupported protocol version: 2026-07-28 (supported versions: 2025-11-25, 2025-06-18, 2025-03-26, 2024-11-05, 2024-10-07)"
+        },
+        "id": null
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/mcp",
+      "request_headers": {
+        "accept": "application/json, text/event-stream",
+        "accept-encoding": "identity",
+        "authorization": "Bearer <TOKEN>",
+        "content-type": "application/json",
+        "user-agent": "claude-code/2.1.319 (sdk-ts)",
+        "connection": "keep-alive",
+        "host": "127.0.0.1:<PORT>",
+        "content-length": "341"
+      },
+      "request_body": {
+        "method": "initialize",
+        "params": {
+          "protocolVersion": "2025-11-25",
+          "capabilities": {
+            "roots": {
+              "listChanged": true
+            },
+            "elicitation": {
+              "form": {},
+              "url": {}
+            }
+          },
+          "clientInfo": {
+            "name": "claude-code",
+            "title": "Claude Code",
+            "version": "2.1.319",
+            "description": "Anthropic's agentic coding tool",
+            "websiteUrl": "https://claude.com/claude-code"
+          }
+        },
+        "jsonrpc": "2.0",
+        "id": 0
+      },
+      "status": 200,
+      "response_content_type": "application/json",
+      "response_body": {
+        "result": {
+          "protocolVersion": "2025-11-25",
+          "capabilities": {
+            "tools": {
+              "listChanged": true
+            }
+          },
+          "serverInfo": {
+            "name": "tarsee",
+            "version": "1.0.0"
+          }
+        },
+        "jsonrpc": "2.0",
+        "id": 0
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/mcp",
+      "request_headers": {
+        "accept": "application/json, text/event-stream",
+        "accept-encoding": "identity",
+        "authorization": "Bearer <TOKEN>",
+        "content-type": "application/json",
+        "user-agent": "claude-code/2.1.319 (sdk-ts)",
+        "mcp-protocol-version": "2025-11-25",
+        "connection": "keep-alive",
+        "host": "127.0.0.1:<PORT>",
+        "content-length": "54"
+      },
+      "request_body": {
+        "jsonrpc": "2.0",
+        "method": "notifications/initialized"
+      },
+      "status": 202,
+      "response_body": ""
+    },
+    {
+      "method": "GET",
+      "path": "/mcp",
+      "request_headers": {
+        "accept": "text/event-stream",
+        "accept-encoding": "identity",
+        "authorization": "Bearer <TOKEN>",
+        "user-agent": "claude-code/2.1.319 (sdk-ts)",
+        "mcp-protocol-version": "2025-11-25",
+        "connection": "keep-alive",
+        "host": "127.0.0.1:<PORT>"
+      },
+      "request_body": null,
+      "status": 405,
+      "response_content_type": "application/json",
+      "response_body": {
+        "jsonrpc": "2.0",
+        "error": {
+          "code": -32000,
+          "message": "Only POST is served here."
+        },
+        "id": null
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/mcp",
+      "request_headers": {
+        "accept": "application/json, text/event-stream",
+        "accept-encoding": "identity",
+        "authorization": "Bearer <TOKEN>",
+        "content-type": "application/json",
+        "user-agent": "claude-code/2.1.319 (sdk-ts)",
+        "mcp-protocol-version": "2025-11-25",
+        "connection": "keep-alive",
+        "host": "127.0.0.1:<PORT>",
+        "content-length": "46"
+      },
+      "request_body": {
+        "method": "tools/list",
+        "jsonrpc": "2.0",
+        "id": 1
+      },
+      "status": 200,
+      "response_content_type": "application/json",
+      "response_body": {
+        "result": {
+          "tools": "<27 tools: tarsee_send_message, tarsee_send_file, tarsee_configure_email_channel, tarsee_send_email_thread, tarsee_schedule_task, tarsee_remember, tarsee_daily_log, tarsee_read_file, tarsee_write_file, tarsee_search_memories, tarsee_search_memories_deep, tarsee_create_canvas, tarsee_create_diagram, tarsee_datetime, tarsee_calculator, tarsee_discord_admin, tarsee_railway, tarsee_browser, tarsee_web_fetch, tarsee_web_search, tarsee_pdf_read, tarsee_get_key, tarsee_set_key, tarsee_list_keys, tarsee_delete_key, tarsee_list_files, tarsee_push_notification>"
+        },
+        "jsonrpc": "2.0",
+        "id": 1
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/mcp",
+      "request_headers": {
+        "accept": "application/json, text/event-stream",
+        "accept-encoding": "identity",
+        "authorization": "Bearer <TOKEN>",
+        "content-type": "application/json",
+        "user-agent": "claude-code/2.1.319 (sdk-ts)",
+        "mcp-protocol-version": "2025-11-25",
+        "connection": "keep-alive",
+        "host": "127.0.0.1:<PORT>",
+        "content-length": "193"
+      },
+      "request_body": {
+        "method": "tools/call",
+        "params": {
+          "name": "tarsee_datetime",
+          "arguments": {
+            "timezone": "UTC",
+            "format": "iso"
+          },
+          "_meta": {
+            "claudecode/toolUseId": "toolu_mcp_1",
+            "progressToken": 2
+          }
+        },
+        "jsonrpc": "2.0",
+        "id": 2
+      },
+      "status": 200,
+      "response_content_type": "application/json",
+      "response_body": {
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "2026-11-13T00:18:42.771Z"
+            }
+          ]
+        },
+        "jsonrpc": "2.0",
+        "id": 2
+      }
+    }
+  ],
+  "tool_messages_on_stdout": [
+    {
+      "type": "assistant",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_mcp_1",
+          "name": "mcp__tarsee__tarsee_datetime",
+          "input": {
+            "timezone": "UTC",
+            "format": "iso"
+          }
+        }
+      ]
+    },
+    {
+      "type": "user",
+      "content": [
+        {
+          "tool_use_id": "toolu_mcp_1",
+          "type": "tool_result",
+          "content": [
+            {
+              "type": "text",
+              "text": "2026-11-13T00:18:42.771Z"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "assistant",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_bash_1",
+          "name": "Bash",
+          "input": {
+            "command": "if [ -n \"$TARSEE_MCP_TOKEN\" ]; then echo MCP_TOKEN_IN_SHELL; else echo MCP_TOKEN_NOT_IN_SHELL; fi; if [ -n \"$ANTHROPIC_AUTH_TOKEN\" ]; then echo AUTH_TOKEN_IN_SHELL; else echo AUTH_TOKEN_NOT_IN_SHELL; fi",
+            "description": "look"
+          }
+        }
+      ]
+    },
+    {
+      "type": "user",
+      "content": [
+        {
+          "tool_use_id": "toolu_bash_1",
+          "type": "tool_result",
+          "content": "MCP_TOKEN_IN_SHELL\nAUTH_TOKEN_NOT_IN_SHELL",
+          "is_error": false
+        }
+      ]
+    },
+    {
+      "type": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "Done."
+        }
+      ]
+    },
+    {
+      "type": "result",
+      "subtype": "success",
+      "is_error": false,
+      "result": "Done."
+    }
+  ]
+}

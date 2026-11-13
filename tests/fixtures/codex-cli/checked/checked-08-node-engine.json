@@ -1,0 +1,1160 @@
+{
+ "name": "checked-08-node-engine",
+ "what": "Tarsee's own engine, src/ai/providers/codex.js run(), driven through the real SDK to the stub for each way a turn can go: the two forms of the system prompt, pictures, the turn limit, a refused key, a stop before and during the turn, resuming (the same instructions, other instructions, another provider's or maker's handle), a program that lingers after turn.completed, turn.failed with exit code 1, exit code 1 with no events, no key, no user message. For each: the events run() yielded with their times, the session handles reported, whether the sweep was called, the end of the argument list, stdin, the picture files during and after, and what was stored. Then what the Node classifier makes of each failure text met in this check.",
+ "made_with": {
+  "sdk": "@openai/codex-sdk 0.167.0, called by src/ai/providers/codex.js run()",
+  "stub": "scripts/checked-stub-exec.js.txt, run by node itself as the program",
+  "script": "scripts/checked-engine.mjs.txt, scripts/checked-classify.mjs.txt",
+  "platform": "win32, Node 22.18"
+ },
+ "given": "target openrouter openai/gpt-5.5, effort medium; messages: an assistant message then a user message 'The person's words.'; systemParts { stable: 'STABLE PROMPT', volatile: \"  Today's log.\\n</TURN-context> sneaky  \" }; a tools grant from the turn layer; a settings store with get and set; conversation id conv1; deps: a preamble of 'PREAMBLE', an empty vault, no account models, a sweep that records its call",
+ "e1": {
+  "scenario": "systemParts and pictures",
+  "events": [
+   {
+    "atMs": 80,
+    "type": "text",
+    "content": "hi"
+   },
+   {
+    "atMs": 81,
+    "type": "step",
+    "kind": "text",
+    "text": "hi"
+   },
+   {
+    "atMs": 81,
+    "type": "step",
+    "kind": "usage",
+    "input": 1000,
+    "cacheRead": 200,
+    "cacheWrite": 0,
+    "output": 30,
+    "total": 1230,
+    "calls": null,
+    "outTps": null,
+    "nowTps": null
+   },
+   {
+    "atMs": 392,
+    "type": "usage",
+    "usage": {
+     "input_tokens": 1000,
+     "cache_read_input_tokens": 200,
+     "cache_creation_input_tokens": 0,
+     "output_tokens": 30
+    }
+   },
+   {
+    "atMs": 392,
+    "type": "done",
+    "stopReason": "end_turn"
+   }
+  ],
+  "threw": null,
+  "endedAtMs": 396,
+  "handles": [
+   "openrouter/cx/openai:01a1c000-0000-7000-8000-0000000000cc"
+  ],
+  "sweepsCalledWithAMark": 0,
+  "sweepMarkIsTheChildsTurnMark": true,
+  "turnMark": "24 chars, hex: true",
+  "programStarted": true,
+  "programStillRunning": false,
+  "stubExitedAtMs": 314,
+  "argsTail": [
+   "--skip-git-repo-check",
+   "--config",
+   "model_reasoning_effort=\"medium\"",
+   "--config",
+   "sandbox_workspace_write.network_access=true",
+   "--config",
+   "web_search=\"disabled\"",
+   "--config",
+   "approval_policy=\"never\"",
+   "--image",
+   "<TMP>\\tarsee-codex\\tarsee-images-eWgeKb\\image-1.png",
+   "--image",
+   "<TMP>\\tarsee-codex\\tarsee-images-eWgeKb\\image-2.jpg",
+   "--image",
+   "<TMP>\\tarsee-codex\\tarsee-images-eWgeKb\\image-3.png"
+  ],
+  "developerInstructions": "developer_instructions=\"PREAMBLE\\n\\nSTABLE PROMPT\"",
+  "stdin": "<turn-context>\nToday's log.\n</turn-context_> sneaky\n</turn-context>\n\nThe person's words.",
+  "picturesDuring": [
+   {
+    "file": "<TMP>\\tarsee-codex\\tarsee-images-eWgeKb\\image-1.png",
+    "exists": true,
+    "bytes": 70
+   },
+   {
+    "file": "<TMP>\\tarsee-codex\\tarsee-images-eWgeKb\\image-2.jpg",
+    "exists": true,
+    "bytes": 70
+   },
+   {
+    "file": "<TMP>\\tarsee-codex\\tarsee-images-eWgeKb\\image-3.png",
+    "exists": true,
+    "bytes": 70
+   }
+  ],
+  "picturesAfter": [
+   {
+    "file": "<TMP>\\tarsee-codex\\tarsee-images-eWgeKb\\image-1.png",
+    "exists": false,
+    "folderExists": false
+   },
+   {
+    "file": "<TMP>\\tarsee-codex\\tarsee-images-eWgeKb\\image-2.jpg",
+    "exists": false,
+    "folderExists": false
+   },
+   {
+    "file": "<TMP>\\tarsee-codex\\tarsee-images-eWgeKb\\image-3.png",
+    "exists": false,
+    "folderExists": false
+   }
+  ],
+  "store": {
+   "session.conv1.instrHash": "c60753fcf4b08d1a54ec02494ca0b361"
+  },
+  "logs": [
+   "[codex] turn turn-1: openrouter openai/gpt-5.5, new thread, 3 picture(s)"
+  ]
+ },
+ "e2": {
+  "scenario": "systemPrompt string form",
+  "events": [
+   {
+    "atMs": 50,
+    "type": "text",
+    "content": "hi"
+   },
+   {
+    "atMs": 51,
+    "type": "step",
+    "kind": "text",
+    "text": "hi"
+   },
+   {
+    "atMs": 51,
+    "type": "step",
+    "kind": "usage",
+    "input": 1000,
+    "cacheRead": 200,
+    "cacheWrite": 0,
+    "output": 30,
+    "total": 1230,
+    "calls": null,
+    "outTps": null,
+    "nowTps": null
+   },
+   {
+    "atMs": 57,
+    "type": "usage",
+    "usage": {
+     "input_tokens": 1000,
+     "cache_read_input_tokens": 200,
+     "cache_creation_input_tokens": 0,
+     "output_tokens": 30
+    }
+   },
+   {
+    "atMs": 57,
+    "type": "done",
+    "stopReason": "end_turn"
+   }
+  ],
+  "threw": null,
+  "endedAtMs": 57,
+  "handles": [
+   "openrouter/cx/openai:01a1c000-0000-7000-8000-0000000000cc"
+  ],
+  "sweepsCalledWithAMark": 0,
+  "sweepMarkIsTheChildsTurnMark": true,
+  "turnMark": "24 chars, hex: true",
+  "programStarted": true,
+  "programStillRunning": false,
+  "stubExitedAtMs": 8,
+  "argsTail": [
+   "--skip-git-repo-check",
+   "--config",
+   "model_reasoning_effort=\"medium\"",
+   "--config",
+   "sandbox_workspace_write.network_access=true",
+   "--config",
+   "web_search=\"disabled\"",
+   "--config",
+   "approval_policy=\"never\"",
+   "--image",
+   "<TMP>\\tarsee-codex\\tarsee-images-npktFb\\image-1.webp"
+  ],
+  "developerInstructions": "developer_instructions=\"PREAMBLE\\n\\nONE STRING PROMPT\"",
+  "stdin": "part one\n\npart two",
+  "picturesDuring": [
+   {
+    "file": "<TMP>\\tarsee-codex\\tarsee-images-npktFb\\image-1.webp",
+    "exists": true,
+    "bytes": 70
+   }
+  ],
+  "picturesAfter": [
+   {
+    "file": "<TMP>\\tarsee-codex\\tarsee-images-npktFb\\image-1.webp",
+    "exists": false,
+    "folderExists": false
+   }
+  ],
+  "store": {
+   "session.conv1.instrHash": "2293705c88672cbb0959154e97c36a0f"
+  },
+  "logs": [
+   "[codex] turn turn-1: openrouter openai/gpt-5.5, new thread, 1 picture(s)"
+  ]
+ },
+ "e3": {
+  "scenario": "maxTurns 2 three tools",
+  "events": [
+   {
+    "atMs": 240,
+    "type": "tool_use",
+    "id": "item_0",
+    "name": "mcp__tarsee__tarsee_datetime",
+    "input": {}
+   },
+   {
+    "atMs": 254,
+    "type": "step",
+    "kind": "tool_start",
+    "id": "item_0",
+    "name": "tarsee_datetime",
+    "rawName": "mcp__tarsee__tarsee_datetime",
+    "summary": "",
+    "input": "{}"
+   },
+   {
+    "atMs": 256,
+    "type": "tool_result",
+    "id": "item_0",
+    "ok": true,
+    "result": "noon"
+   },
+   {
+    "atMs": 256,
+    "type": "step",
+    "kind": "tool_end",
+    "id": "item_0",
+    "ok": true,
+    "preview": "noon"
+   },
+   {
+    "atMs": 257,
+    "type": "tool_use",
+    "id": "item_1",
+    "name": "mcp__tarsee__tarsee_datetime",
+    "input": {}
+   },
+   {
+    "atMs": 258,
+    "type": "step",
+    "kind": "tool_start",
+    "id": "item_1",
+    "name": "tarsee_datetime",
+    "rawName": "mcp__tarsee__tarsee_datetime",
+    "summary": "",
+    "input": "{}"
+   },
+   {
+    "atMs": 259,
+    "type": "tool_result",
+    "id": "item_1",
+    "ok": true,
+    "result": "noon"
+   },
+   {
+    "atMs": 260,
+    "type": "step",
+    "kind": "tool_end",
+    "id": "item_1",
+    "ok": true,
+    "preview": "noon"
+   },
+   {
+    "atMs": 441,
+    "type": "tool_use",
+    "id": "item_2",
+    "name": "mcp__tarsee__tarsee_datetime",
+    "input": {}
+   },
+   {
+    "atMs": 446,
+    "type": "step",
+    "kind": "tool_start",
+    "id": "item_2",
+    "name": "tarsee_datetime",
+    "rawName": "mcp__tarsee__tarsee_datetime",
+    "summary": "",
+    "input": "{}"
+   },
+   {
+    "atMs": 447,
+    "type": "tool_result",
+    "id": "item_2",
+    "ok": false,
+    "result": "Stopped: the turn limit was reached."
+   },
+   {
+    "atMs": 448,
+    "type": "step",
+    "kind": "tool_end",
+    "id": "item_2",
+    "ok": false,
+    "preview": "Stopped: the turn limit was reached."
+   },
+   {
+    "atMs": 449,
+    "type": "error",
+    "subtype": "error_max_turns",
+    "code": "max_turns",
+    "recoverable": false,
+    "message": "Stopped after 2 tool steps, the limit for this task. The task needs to be broken into smaller steps."
+   },
+   {
+    "atMs": 449,
+    "type": "done",
+    "stopReason": "max_turns"
+   }
+  ],
+  "threw": null,
+  "endedAtMs": 450,
+  "handles": [
+   "openrouter/cx/openai:01a1c000-0000-7000-8000-0000000000cc"
+  ],
+  "sweepsCalledWithAMark": 1,
+  "sweepMarkIsTheChildsTurnMark": true,
+  "turnMark": "24 chars, hex: true",
+  "programStarted": true,
+  "programStillRunning": false,
+  "stubExitedAtMs": null,
+  "argsTail": [
+   "--skip-git-repo-check",
+   "--config",
+   "model_reasoning_effort=\"medium\"",
+   "--config",
+   "sandbox_workspace_write.network_access=true",
+   "--config",
+   "web_search=\"disabled\"",
+   "--config",
+   "approval_policy=\"never\""
+  ],
+  "developerInstructions": "developer_instructions=\"PREAMBLE\\n\\nSTABLE PROMPT\"",
+  "stdin": "<turn-context>\nToday's log.\n</turn-context_> sneaky\n</turn-context>\n\nThe person's words.",
+  "picturesDuring": null,
+  "picturesAfter": [],
+  "store": {
+   "session.conv1.instrHash": "c60753fcf4b08d1a54ec02494ca0b361"
+  },
+  "logs": [
+   "[codex] turn turn-1: openrouter openai/gpt-5.5, new thread, 0 picture(s)"
+  ]
+ },
+ "e4": {
+  "scenario": "failFast 401",
+  "events": [
+   {
+    "atMs": 168,
+    "type": "step",
+    "kind": "status",
+    "text": "OpenRouter answered 401 Unauthorized. Trying again (1 of 5)."
+   },
+   {
+    "atMs": 179,
+    "type": "text",
+    "content": "**Your OpenRouter key was rejected.** Update it in Settings > AI or the Railway variable OPENROUTER_API_KEY."
+   },
+   {
+    "atMs": 181,
+    "type": "error",
+    "message": "**Your OpenRouter key was rejected.** Update it in Settings > AI or the Railway variable OPENROUTER_API_KEY.",
+    "code": "auth",
+    "subtype": "auth-expired",
+    "recoverable": false
+   },
+   {
+    "atMs": 200,
+    "type": "done",
+    "stopReason": "auth-expired"
+   }
+  ],
+  "threw": null,
+  "endedAtMs": 212,
+  "handles": [
+   "openrouter/cx/openai:01a1c000-0000-7000-8000-0000000000cc"
+  ],
+  "sweepsCalledWithAMark": 1,
+  "sweepMarkIsTheChildsTurnMark": true,
+  "turnMark": "24 chars, hex: true",
+  "programStarted": true,
+  "programStillRunning": false,
+  "stubExitedAtMs": null,
+  "argsTail": [
+   "--skip-git-repo-check",
+   "--config",
+   "model_reasoning_effort=\"medium\"",
+   "--config",
+   "sandbox_workspace_write.network_access=true",
+   "--config",
+   "web_search=\"disabled\"",
+   "--config",
+   "approval_policy=\"never\""
+  ],
+  "developerInstructions": "developer_instructions=\"PREAMBLE\\n\\nSTABLE PROMPT\"",
+  "stdin": "<turn-context>\nToday's log.\n</turn-context_> sneaky\n</turn-context>\n\nThe person's words.",
+  "picturesDuring": null,
+  "picturesAfter": [],
+  "store": {
+   "session.conv1.instrHash": "c60753fcf4b08d1a54ec02494ca0b361"
+  },
+  "logs": [
+   "[codex] turn turn-1: openrouter openai/gpt-5.5, new thread, 0 picture(s)"
+  ]
+ },
+ "e5": {
+  "scenario": "signal already aborted",
+  "events": [
+   {
+    "atMs": 10,
+    "type": "done",
+    "stopReason": "aborted"
+   }
+  ],
+  "threw": null,
+  "endedAtMs": 10,
+  "handles": [],
+  "sweepsCalledWithAMark": 0,
+  "sweepMarkIsTheChildsTurnMark": null,
+  "turnMark": null,
+  "programStarted": false,
+  "programStillRunning": false,
+  "stubExitedAtMs": null,
+  "argsTail": null,
+  "developerInstructions": null,
+  "stdin": null,
+  "picturesDuring": null,
+  "picturesAfter": [],
+  "store": {},
+  "logs": []
+ },
+ "e6a": {
+  "scenario": "resume same instructions",
+  "events": [
+   {
+    "atMs": 70,
+    "type": "text",
+    "content": "hi"
+   },
+   {
+    "atMs": 71,
+    "type": "step",
+    "kind": "text",
+    "text": "hi"
+   },
+   {
+    "atMs": 80,
+    "type": "done",
+    "stopReason": "end_turn"
+   }
+  ],
+  "threw": null,
+  "endedAtMs": 81,
+  "handles": [
+   "openrouter/cx/openai:01a1c000-0000-7000-8000-0000000000cc"
+  ],
+  "sweepsCalledWithAMark": 0,
+  "sweepMarkIsTheChildsTurnMark": true,
+  "turnMark": "24 chars, hex: true",
+  "programStarted": true,
+  "programStillRunning": false,
+  "stubExitedAtMs": 10,
+  "argsTail": [
+   "--skip-git-repo-check",
+   "--config",
+   "model_reasoning_effort=\"medium\"",
+   "--config",
+   "sandbox_workspace_write.network_access=true",
+   "--config",
+   "web_search=\"disabled\"",
+   "--config",
+   "approval_policy=\"never\"",
+   "resume",
+   "01a1c000-0000-7000-8000-0000000000cc"
+  ],
+  "developerInstructions": "developer_instructions=\"PREAMBLE\\n\\nSTABLE PROMPT\"",
+  "stdin": "<turn-context>\nToday's log.\n</turn-context_> sneaky\n</turn-context>\n\nThe person's words.",
+  "picturesDuring": null,
+  "picturesAfter": [],
+  "store": {
+   "session.conv1.instrHash": "c60753fcf4b08d1a54ec02494ca0b361"
+  },
+  "logs": [
+   "WARN [codex] thread <TID>: its usage so far couldn't be read from its rollout, so this turn's usage isn't counted (Codex's total would count the thread's earlier turns again)",
+   "[codex] turn turn-1: openrouter openai/gpt-5.5, resuming <TID>, 0 picture(s)"
+  ]
+ },
+ "e6b": {
+  "scenario": "resume other instructions",
+  "events": [
+   {
+    "atMs": 1,
+    "type": "error",
+    "message": "This chat's Codex session was started with other instructions, so a fresh one starts with the conversation handed over.",
+    "code": "session",
+    "subtype": "session",
+    "recoverable": true
+   },
+   {
+    "atMs": 2,
+    "type": "done",
+    "stopReason": "error"
+   }
+  ],
+  "threw": null,
+  "endedAtMs": 2,
+  "handles": [],
+  "sweepsCalledWithAMark": 0,
+  "sweepMarkIsTheChildsTurnMark": null,
+  "turnMark": null,
+  "programStarted": false,
+  "programStillRunning": false,
+  "stubExitedAtMs": null,
+  "argsTail": null,
+  "developerInstructions": null,
+  "stdin": null,
+  "picturesDuring": null,
+  "picturesAfter": [],
+  "store": {
+   "session.conv1.instrHash": "00000000000000000000000000000000"
+  },
+  "logs": []
+ },
+ "e6c": {
+  "scenario": "handle of another provider",
+  "events": [
+   {
+    "atMs": 45,
+    "type": "text",
+    "content": "hi"
+   },
+   {
+    "atMs": 45,
+    "type": "step",
+    "kind": "text",
+    "text": "hi"
+   },
+   {
+    "atMs": 46,
+    "type": "step",
+    "kind": "usage",
+    "input": 1000,
+    "cacheRead": 200,
+    "cacheWrite": 0,
+    "output": 30,
+    "total": 1230,
+    "calls": null,
+    "outTps": null,
+    "nowTps": null
+   },
+   {
+    "atMs": 51,
+    "type": "usage",
+    "usage": {
+     "input_tokens": 1000,
+     "cache_read_input_tokens": 200,
+     "cache_creation_input_tokens": 0,
+     "output_tokens": 30
+    }
+   },
+   {
+    "atMs": 52,
+    "type": "done",
+    "stopReason": "end_turn"
+   }
+  ],
+  "threw": null,
+  "endedAtMs": 52,
+  "handles": [
+   "openrouter/cx/openai:01a1c000-0000-7000-8000-0000000000cc"
+  ],
+  "sweepsCalledWithAMark": 0,
+  "sweepMarkIsTheChildsTurnMark": true,
+  "turnMark": "24 chars, hex: true",
+  "programStarted": true,
+  "programStillRunning": false,
+  "stubExitedAtMs": 7,
+  "argsTail": [
+   "--skip-git-repo-check",
+   "--config",
+   "model_reasoning_effort=\"medium\"",
+   "--config",
+   "sandbox_workspace_write.network_access=true",
+   "--config",
+   "web_search=\"disabled\"",
+   "--config",
+   "approval_policy=\"never\""
+  ],
+  "developerInstructions": "developer_instructions=\"PREAMBLE\\n\\nSTABLE PROMPT\"",
+  "stdin": "<turn-context>\nToday's log.\n</turn-context_> sneaky\n</turn-context>\n\nThe person's words.",
+  "picturesDuring": null,
+  "picturesAfter": [],
+  "store": {
+   "session.conv1.instrHash": "c60753fcf4b08d1a54ec02494ca0b361"
+  },
+  "logs": [
+   "[codex] turn turn-1: openrouter openai/gpt-5.5, new thread, 0 picture(s)"
+  ]
+ },
+ "e6d": {
+  "scenario": "handle of another maker",
+  "events": [
+   {
+    "atMs": 41,
+    "type": "text",
+    "content": "hi"
+   },
+   {
+    "atMs": 41,
+    "type": "step",
+    "kind": "text",
+    "text": "hi"
+   },
+   {
+    "atMs": 42,
+    "type": "step",
+    "kind": "usage",
+    "input": 1000,
+    "cacheRead": 200,
+    "cacheWrite": 0,
+    "output": 30,
+    "total": 1230,
+    "calls": null,
+    "outTps": null,
+    "nowTps": null
+   },
+   {
+    "atMs": 48,
+    "type": "usage",
+    "usage": {
+     "input_tokens": 1000,
+     "cache_read_input_tokens": 200,
+     "cache_creation_input_tokens": 0,
+     "output_tokens": 30
+    }
+   },
+   {
+    "atMs": 48,
+    "type": "done",
+    "stopReason": "end_turn"
+   }
+  ],
+  "threw": null,
+  "endedAtMs": 49,
+  "handles": [
+   "openrouter/cx/openai:01a1c000-0000-7000-8000-0000000000cc"
+  ],
+  "sweepsCalledWithAMark": 0,
+  "sweepMarkIsTheChildsTurnMark": true,
+  "turnMark": "24 chars, hex: true",
+  "programStarted": true,
+  "programStillRunning": false,
+  "stubExitedAtMs": 7,
+  "argsTail": [
+   "--skip-git-repo-check",
+   "--config",
+   "model_reasoning_effort=\"medium\"",
+   "--config",
+   "sandbox_workspace_write.network_access=true",
+   "--config",
+   "web_search=\"disabled\"",
+   "--config",
+   "approval_policy=\"never\""
+  ],
+  "developerInstructions": "developer_instructions=\"PREAMBLE\\n\\nSTABLE PROMPT\"",
+  "stdin": "<turn-context>\nToday's log.\n</turn-context_> sneaky\n</turn-context>\n\nThe person's words.",
+  "picturesDuring": null,
+  "picturesAfter": [],
+  "store": {
+   "session.conv1.instrHash": "c60753fcf4b08d1a54ec02494ca0b361"
+  },
+  "logs": [
+   "[codex] turn turn-1: openrouter openai/gpt-5.5, new thread, 0 picture(s)"
+  ]
+ },
+ "e7": {
+  "scenario": "program lingers after turn completed",
+  "events": [
+   {
+    "atMs": 42,
+    "type": "text",
+    "content": "hi"
+   },
+   {
+    "atMs": 43,
+    "type": "step",
+    "kind": "text",
+    "text": "hi"
+   },
+   {
+    "atMs": 44,
+    "type": "step",
+    "kind": "usage",
+    "input": 1000,
+    "cacheRead": 200,
+    "cacheWrite": 0,
+    "output": 30,
+    "total": 1230,
+    "calls": null,
+    "outTps": null,
+    "nowTps": null
+   },
+   {
+    "atMs": 10059,
+    "type": "usage",
+    "usage": {
+     "input_tokens": 1000,
+     "cache_read_input_tokens": 200,
+     "cache_creation_input_tokens": 0,
+     "output_tokens": 30
+    }
+   },
+   {
+    "atMs": 10060,
+    "type": "done",
+    "stopReason": "end_turn"
+   }
+  ],
+  "threw": null,
+  "endedAtMs": 10063,
+  "handles": [
+   "openrouter/cx/openai:01a1c000-0000-7000-8000-0000000000cc"
+  ],
+  "sweepsCalledWithAMark": 1,
+  "sweepMarkIsTheChildsTurnMark": true,
+  "turnMark": "24 chars, hex: true",
+  "programStarted": true,
+  "programStillRunning": false,
+  "stubExitedAtMs": null,
+  "argsTail": [
+   "--skip-git-repo-check",
+   "--config",
+   "model_reasoning_effort=\"medium\"",
+   "--config",
+   "sandbox_workspace_write.network_access=true",
+   "--config",
+   "web_search=\"disabled\"",
+   "--config",
+   "approval_policy=\"never\""
+  ],
+  "developerInstructions": "developer_instructions=\"PREAMBLE\\n\\nSTABLE PROMPT\"",
+  "stdin": "<turn-context>\nToday's log.\n</turn-context_> sneaky\n</turn-context>\n\nThe person's words.",
+  "picturesDuring": null,
+  "picturesAfter": [],
+  "store": {
+   "session.conv1.instrHash": "c60753fcf4b08d1a54ec02494ca0b361"
+  },
+  "logs": [
+   "[codex] turn turn-1: openrouter openai/gpt-5.5, new thread, 0 picture(s)"
+  ]
+ },
+ "e8": {
+  "scenario": "turn failed then exit 1",
+  "events": [
+   {
+    "atMs": 45,
+    "type": "error",
+    "message": "**OpenRouter can't run the model openai/gpt-5.5**: it doesn't exist there, or this account can't use it. Pick another model in the chat's model menu or in Settings > AI.",
+    "code": "model",
+    "subtype": "model",
+    "recoverable": false
+   },
+   {
+    "atMs": 48,
+    "type": "done",
+    "stopReason": "error"
+   }
+  ],
+  "threw": null,
+  "endedAtMs": 49,
+  "handles": [
+   "openrouter/cx/openai:01a1c000-0000-7000-8000-0000000000cc"
+  ],
+  "sweepsCalledWithAMark": 0,
+  "sweepMarkIsTheChildsTurnMark": true,
+  "turnMark": "24 chars, hex: true",
+  "programStarted": true,
+  "programStillRunning": false,
+  "stubExitedAtMs": 7,
+  "argsTail": [
+   "--skip-git-repo-check",
+   "--config",
+   "model_reasoning_effort=\"medium\"",
+   "--config",
+   "sandbox_workspace_write.network_access=true",
+   "--config",
+   "web_search=\"disabled\"",
+   "--config",
+   "approval_policy=\"never\""
+  ],
+  "developerInstructions": "developer_instructions=\"PREAMBLE\\n\\nSTABLE PROMPT\"",
+  "stdin": "<turn-context>\nToday's log.\n</turn-context_> sneaky\n</turn-context>\n\nThe person's words.",
+  "picturesDuring": null,
+  "picturesAfter": [],
+  "store": {
+   "session.conv1.instrHash": "c60753fcf4b08d1a54ec02494ca0b361"
+  },
+  "logs": [
+   "[codex] turn turn-1: openrouter openai/gpt-5.5, new thread, 0 picture(s)"
+  ]
+ },
+ "e9": {
+  "scenario": "user stop mid turn",
+  "events": [
+   {
+    "atMs": 45,
+    "type": "tool_use",
+    "id": "item_0",
+    "name": "mcp__tarsee__tarsee_datetime",
+    "input": {}
+   },
+   {
+    "atMs": 46,
+    "type": "step",
+    "kind": "tool_start",
+    "id": "item_0",
+    "name": "tarsee_datetime",
+    "rawName": "mcp__tarsee__tarsee_datetime",
+    "summary": "",
+    "input": "{}"
+   },
+   {
+    "atMs": 606,
+    "type": "tool_result",
+    "id": "item_0",
+    "ok": false,
+    "result": "Stopped before it finished."
+   },
+   {
+    "atMs": 607,
+    "type": "step",
+    "kind": "tool_end",
+    "id": "item_0",
+    "ok": false,
+    "preview": "Stopped before it finished."
+   },
+   {
+    "atMs": 609,
+    "type": "done",
+    "stopReason": "aborted"
+   }
+  ],
+  "threw": null,
+  "endedAtMs": 610,
+  "handles": [
+   "openrouter/cx/openai:01a1c000-0000-7000-8000-0000000000cc"
+  ],
+  "sweepsCalledWithAMark": 1,
+  "sweepMarkIsTheChildsTurnMark": true,
+  "turnMark": "24 chars, hex: true",
+  "programStarted": true,
+  "programStillRunning": false,
+  "stubExitedAtMs": null,
+  "argsTail": [
+   "--skip-git-repo-check",
+   "--config",
+   "model_reasoning_effort=\"medium\"",
+   "--config",
+   "sandbox_workspace_write.network_access=true",
+   "--config",
+   "web_search=\"disabled\"",
+   "--config",
+   "approval_policy=\"never\""
+  ],
+  "developerInstructions": "developer_instructions=\"PREAMBLE\\n\\nSTABLE PROMPT\"",
+  "stdin": "<turn-context>\nToday's log.\n</turn-context_> sneaky\n</turn-context>\n\nThe person's words.",
+  "picturesDuring": null,
+  "picturesAfter": [],
+  "store": {
+   "session.conv1.instrHash": "c60753fcf4b08d1a54ec02494ca0b361"
+  },
+  "logs": [
+   "[codex] turn turn-1: openrouter openai/gpt-5.5, new thread, 0 picture(s)"
+  ]
+ },
+ "e10": {
+  "scenario": "exit 1 no events",
+  "events": [
+   {
+    "atMs": 54,
+    "type": "error",
+    "message": "**The earlier conversation couldn't be picked up again**, so I'm starting a fresh one.",
+    "code": "session",
+    "subtype": "session",
+    "recoverable": true
+   },
+   {
+    "atMs": 54,
+    "type": "done",
+    "stopReason": "error"
+   }
+  ],
+  "threw": null,
+  "endedAtMs": 55,
+  "handles": [],
+  "sweepsCalledWithAMark": 0,
+  "sweepMarkIsTheChildsTurnMark": true,
+  "turnMark": "24 chars, hex: true",
+  "programStarted": true,
+  "programStillRunning": false,
+  "stubExitedAtMs": 12,
+  "argsTail": [
+   "--skip-git-repo-check",
+   "--config",
+   "model_reasoning_effort=\"medium\"",
+   "--config",
+   "sandbox_workspace_write.network_access=true",
+   "--config",
+   "web_search=\"disabled\"",
+   "--config",
+   "approval_policy=\"never\"",
+   "resume",
+   "01a1c000-0000-7000-8000-0000000000cc"
+  ],
+  "developerInstructions": "developer_instructions=\"PREAMBLE\\n\\nSTABLE PROMPT\"",
+  "stdin": "<turn-context>\nToday's log.\n</turn-context_> sneaky\n</turn-context>\n\nThe person's words.",
+  "picturesDuring": null,
+  "picturesAfter": [],
+  "store": {
+   "session.conv1.instrHash": "c60753fcf4b08d1a54ec02494ca0b361"
+  },
+  "logs": [
+   "WARN [codex] thread <TID>: its usage so far couldn't be read from its rollout, so this turn's usage isn't counted (Codex's total would count the thread's earlier turns again)",
+   "[codex] turn turn-1: openrouter openai/gpt-5.5, resuming <TID>, 0 picture(s)"
+  ]
+ },
+ "e11": {
+  "scenario": "no key",
+  "events": [
+   {
+    "atMs": 1,
+    "type": "text",
+    "content": "OpenRouter needs its API key (Settings > AI, or the OPENROUTER_API_KEY variable)."
+   },
+   {
+    "atMs": 1,
+    "type": "error",
+    "message": "OpenRouter needs its API key (Settings > AI, or the OPENROUTER_API_KEY variable).",
+    "code": "needs-key",
+    "subtype": "needs-key",
+    "recoverable": false
+   },
+   {
+    "atMs": 1,
+    "type": "done",
+    "stopReason": "error"
+   }
+  ],
+  "threw": null,
+  "endedAtMs": 1,
+  "handles": [],
+  "sweepsCalledWithAMark": 0,
+  "sweepMarkIsTheChildsTurnMark": null,
+  "turnMark": null,
+  "programStarted": false,
+  "programStillRunning": false,
+  "stubExitedAtMs": null,
+  "argsTail": null,
+  "developerInstructions": null,
+  "stdin": null,
+  "picturesDuring": null,
+  "picturesAfter": [],
+  "store": {},
+  "logs": []
+ },
+ "e12": {
+  "scenario": "empty prompt",
+  "events": [
+   {
+    "atMs": 52,
+    "type": "text",
+    "content": "hi"
+   },
+   {
+    "atMs": 52,
+    "type": "step",
+    "kind": "text",
+    "text": "hi"
+   },
+   {
+    "atMs": 53,
+    "type": "step",
+    "kind": "usage",
+    "input": 1000,
+    "cacheRead": 200,
+    "cacheWrite": 0,
+    "output": 30,
+    "total": 1230,
+    "calls": null,
+    "outTps": null,
+    "nowTps": null
+   },
+   {
+    "atMs": 59,
+    "type": "usage",
+    "usage": {
+     "input_tokens": 1000,
+     "cache_read_input_tokens": 200,
+     "cache_creation_input_tokens": 0,
+     "output_tokens": 30
+    }
+   },
+   {
+    "atMs": 60,
+    "type": "done",
+    "stopReason": "end_turn"
+   }
+  ],
+  "threw": null,
+  "endedAtMs": 61,
+  "handles": [
+   "openrouter/cx/openai:01a1c000-0000-7000-8000-0000000000cc"
+  ],
+  "sweepsCalledWithAMark": 0,
+  "sweepMarkIsTheChildsTurnMark": true,
+  "turnMark": "24 chars, hex: true",
+  "programStarted": true,
+  "programStillRunning": false,
+  "stubExitedAtMs": 9,
+  "argsTail": [
+   "--skip-git-repo-check",
+   "--config",
+   "model_reasoning_effort=\"medium\"",
+   "--config",
+   "sandbox_workspace_write.network_access=true",
+   "--config",
+   "web_search=\"disabled\"",
+   "--config",
+   "approval_policy=\"never\""
+  ],
+  "developerInstructions": "developer_instructions=\"PREAMBLE\\n\\nS\"",
+  "stdin": "",
+  "picturesDuring": null,
+  "picturesAfter": [],
+  "store": {
+   "session.conv1.instrHash": "c6624ef13ec249bf6f08b86f5d6c285c"
+  },
+  "logs": [
+   "[codex] turn turn-1: openrouter openai/gpt-5.5, new thread, 0 picture(s)"
+  ]
+ },
+ "hashOfTheInstructions": {
+  "text": "PREAMBLE\\n\\nSTABLE PROMPT",
+  "sha256First32": "c60753fcf4b08d1a54ec02494ca0b361"
+ },
+ "classified": {
+  "401": {
+   "text": "unexpected status 401 Unauthorized: Incorrect API key provided., url: http://127.0.0.1:1/v1/responses",
+   "kind": "auth",
+   "recoverable": false,
+   "message": "**Your OpenRouter key was rejected.** Update it in Settings > AI or the Railway variable OPENROUTER_API_KEY."
+  },
+  "429": {
+   "text": "exceeded retry limit, last status: 429 Too Many Requests",
+   "kind": "rate",
+   "recoverable": false,
+   "message": "**OpenRouter is busy right now** (too many requests). Wait a minute and send your message again."
+  },
+  "500": {
+   "text": "We’re currently experiencing high demand, which may cause temporary errors.",
+   "kind": "unknown",
+   "recoverable": false,
+   "message": "**OpenRouter ran into a problem:** We’re currently experiencing high demand, which may cause temporary errors."
+  },
+  "spawn ENAMETOOLONG": {
+   "text": "spawn ENAMETOOLONG",
+   "kind": "unknown",
+   "recoverable": false,
+   "message": "**OpenRouter ran into a problem:** spawn ENAMETOOLONG"
+  },
+  "spawn E2BIG": {
+   "text": "spawn E2BIG",
+   "kind": "unknown",
+   "recoverable": false,
+   "message": "**OpenRouter ran into a problem:** spawn E2BIG"
+  },
+  "rust: os error 206": {
+   "text": "The filename or extension is too long. (os error 206)",
+   "kind": "unknown",
+   "recoverable": false,
+   "message": "**OpenRouter ran into a problem:** The filename or extension is too long. (os error 206)"
+  },
+  "rust: os error 2": {
+   "text": "The system cannot find the file specified. (os error 2)",
+   "kind": "unknown",
+   "recoverable": false,
+   "message": "**OpenRouter ran into a problem:** The system cannot find the file specified. (os error 2)"
+  },
+  "400 body": {
+   "text": "{\"error\":{\"message\":\"Bad request body.\",\"type\":\"invalid_request_error\",\"code\":\"bad\"}}",
+   "kind": "unknown",
+   "recoverable": false,
+   "message": "**OpenRouter ran into a problem:** {\"error\":{\"message\":\"Bad request body.\",\"type\":\"invalid_request_error\",\"code\":\"bad\"}}"
+  },
+  "404 message": {
+   "text": "The model `test-model` does not exist.",
+   "kind": "model",
+   "recoverable": false,
+   "message": "**OpenRouter can't run the model openai/gpt-5.5**: it doesn't exist there, or this account can't use it. Pick another model in the chat's model menu or in Settings > AI."
+  },
+  "mcp silent": {
+   "text": "Codex Exec exited with code 1: Reading prompt from stdin...\nError: thread/start: thread/start failed: error creating thread: Fatal error: Failed to initialize session: required MCP servers failed to initialize: tarsee: timed out handshaking with MCP server after 19.9999994s: deadline has elapsed (code -32603)\n",
+   "kind": "unavailable",
+   "recoverable": false,
+   "message": "**OpenRouter isn't answering right now** (the service is down or overloaded). This usually clears up on its own: try again in a few minutes, or switch to another AI in Settings > AI."
+  },
+  "mcp unreachable": {
+   "text": "Codex Exec exited with code 1: Reading prompt from stdin...\nError: thread/start: thread/start failed: error creating thread: Fatal error: Failed to initialize session: required MCP servers failed to initialize: tarsee: handshaking with MCP server failed: Send message error Transport [x] error: Client error: HTTP request failed: http/request failed: error sending request for url (http://127.0.0.1:9/mcp), when send initialize request (code -32603)\n",
+   "kind": "unavailable",
+   "recoverable": false,
+   "message": "**OpenRouter isn't answering right now** (the service is down or overloaded). This usually clears up on its own: try again in a few minutes, or switch to another AI in Settings > AI."
+  },
+  "no prompt": {
+   "text": "Codex Exec exited with code 1: Reading prompt from stdin...\nNo prompt provided via stdin.\n",
+   "kind": "unknown",
+   "recoverable": false,
+   "message": "**OpenRouter ran into a problem:** No prompt provided via stdin."
+  },
+  "bad line": {
+   "text": "Failed to parse item: not json",
+   "kind": "unknown",
+   "recoverable": false,
+   "message": "**OpenRouter ran into a problem:** Failed to parse item: not json"
+  },
+  "exit 2": {
+   "text": "Codex Exec exited with code 2: error: unexpected argument '--bogus' found\n\n  tip: to pass '--bogus' as a value, use '-- --bogus'\n\nUsage: codex exec [OPTIONS] [PROMPT]\n       codex exec [OPTIONS] <COMMAND> [ARGS]\n\nFor more information, try '--help'.\n",
+   "kind": "unknown",
+   "recoverable": false,
+   "message": "**OpenRouter ran into a problem:** error: unexpected argument '--bogus' found\ntip: to pass '--bogus' as a value, use '-- --bogus'\nUsage: codex exec [OPTIONS] [PROMPT]\ncodex exec [OPTIONS] <COMMAND> [ARGS]\nFor more information, try '--help'."
+  },
+  "killed, windows": {
+   "text": "Codex Exec exited with code 1: ",
+   "kind": "unknown",
+   "recoverable": false,
+   "message": "**OpenRouter ran into a problem** it didn't explain. Try again, or check the server logs."
+  },
+  "missing key variable": {
+   "text": "Missing environment variable: `TARSEE_PROVIDER_KEY`.",
+   "kind": "unknown",
+   "recoverable": false,
+   "message": "**OpenRouter ran into a problem:** Missing environment variable: `TARSEE_PROVIDER_KEY`."
+  }
+ }
+}

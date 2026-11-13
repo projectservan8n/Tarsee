@@ -1,0 +1,302 @@
+// Capture harness: runs Tarsee's own Claude Code engine (src/ai/providers/claude-code.js run()) with the real Agent
+// SDK 0.3.319, but with a stub in place of the claude program, and writes down what the SDK did.
+//
+// Two ways the stub is put in:
+//   native   options.pathToClaudeCodeExecutable = stub-claude.exe (a native launcher for stub-claude.mjs). The SDK
+//            starts it exactly as it starts the real claude.exe; the stub records argv, cwd, env and stdin itself.
+//   hook     options.spawnClaudeCodeProcess: the SDK hands over { command, args, cwd, env, signal } instead of
+//            starting anything, the harness records that and starts `node stub-claude.mjs` itself, watching every
+//            kill() the SDK makes. Used to see the command the SDK would have run and to time a stopped turn.
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+// Where things are comes from the environment, so nothing here names a machine:
+//   CAPTURE_SCRATCH       an empty scratch folder for homes, workspaces and records (never inside a repository)
+//   TARSEE_NODE_PROJECT   the Node checkout of Tarsee with node_modules installed (read only)
+function need(name) {
+  const v = String(process.env[name] || "").trim().split("\\").join("/").replace(/[/]+$/, "");
+  if (!v) throw new Error(`set ${name} (see tests/fixtures/claude-cli/README.md)`);
+  return v;
+}
+export const SCRATCH = need("CAPTURE_SCRATCH");
+export const NODE_PROJECT = need("TARSEE_NODE_PROJECT");
+const STUB_DIR = `${SCRATCH}/stub`;
+const STUB_EXE = path.win32.normalize(`${STUB_DIR}/stub-claude.exe`);
+const STUB_SCRIPT = path.win32.normalize(`${STUB_DIR}/stub-claude.mjs`);
+const MISSING_EXE = path.win32.normalize(`${STUB_DIR}/nothing-here/claude.exe`);
+
+// Tarsee's config makes its folders when it is imported: point them at the scratch folder first.
+process.env.TARSEE_STATE_DIR = path.win32.normalize(`${SCRATCH}/tarsee-state`);
+process.env.TARSEE_WORKSPACE_DIR = path.win32.normalize(`${SCRATCH}/tarsee-workspace`);
+process.env.TARSEE_DATA_DIR = path.win32.normalize(`${SCRATCH}/tarsee-data`);
+process.env.TARSEE_TIMEZONE = "UTC";
+// This harness may itself be started from a Claude Code session: nothing of that may reach the SDK or Tarsee's code.
+for (const k of Object.keys(process.env)) if (/^(ANTHROPIC_|CLAUDE_|CLAUDECODE|DEBUG$|NODE_OPTIONS$|OTEL_|TRACEPARENT$|TRACESTATE$)/i.test(k)) delete process.env[k];
+
+const sdk = await import(pathToFileURL(`${NODE_PROJECT}/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs`).href);
+const engine = await import(pathToFileURL(`${NODE_PROJECT}/src/ai/providers/claude-code.js`).href);
+const { createTarseeMcp } = await import(pathToFileURL(`${NODE_PROJECT}/src/ai/tarsee-mcp.js`).href);
+export { sdk, engine, createTarseeMcp };
+
+/** Fake keys, built from parts so nothing here looks like a real one to a scanner. */
+export const KEYS = {
+  anthropic: "sk-ant-" + "api03-test-not-a-key-AAAAAAAAAAAA",
+  deepseek: "sk-" + "testnotakeydeepseek00001",
+  openrouter: "sk-or-v1-" + "testnotakeyopenrouter01",
+  planToken: "sk-ant-" + "oat01-test-not-a-token-000000",
+  canaryApiKey: "sk-ant-" + "api03-canary-server-env-key-000000",
+};
+
+/** The model the tier words resolve to in these captures (the newest pinned row of each tier in config/constants.js). */
+export const TEST_MODELS = { fable: "claude-fable-5-1", opus: "claude-opus-5", sonnet: "claude-sonnet-5", haiku: "claude-haiku-4-5" };
+export const resolveModel = (m) => TEST_MODELS[String(m || "").trim().toLowerCase()] || m;
+
+export function dirsFor(name) {
+  const root = `${SCRATCH}/cap/${name}`;
+  fs.rmSync(root, { recursive: true, force: true });
+  const d = { root, stateDir: path.win32.normalize(`${root}/state`), homeDir: path.win32.normalize(`${root}/home`), cwd: path.win32.normalize(`${root}/workspace`) };
+  for (const x of [d.stateDir, d.homeDir, d.cwd]) fs.mkdirSync(x, { recursive: true });
+  return d;
+}
+
+/** The "server's environment" a capture starts from: small and fixed, with things in it that must be stripped. */
+export function serverEnv(d, extra = {}) {
+  const env = {};
+  for (const k of ["PATH", "SystemRoot", "TEMP", "TMP", "COMSPEC", "PATHEXT", "windir", "SystemDrive"]) if (process.env[k] != null) env[k] = process.env[k];
+  return {
+    ...env,
+    USERPROFILE: d.homeDir,
+    HOME: d.homeDir,
+    // Stripped by Tarsee before the SDK sees them (engine-env.js R2):
+    ANTHROPIC_API_KEY: KEYS.canaryApiKey,
+    ANTHROPIC_BASE_URL: "http://127.0.0.1:9/should-never-be-used",
+    OPENROUTER_API_KEY: "sk-or-v1-" + "canaryserverenv0000001",
+    CLAUDE_CONFIG_DIR: path.win32.join(d.homeDir, "wrong-config-dir"),
+    ENCRYPTION_KEY: "canary-encryption-key",
+    // Removed or rewritten by the SDK itself:
+    NODE_OPTIONS: "--max-old-space-size=4096",
+    DEBUG: "canary-debug",
+    ...extra,
+  };
+}
+
+const isObj = (v) => v && typeof v === "object";
+
+/** Replace machine paths and fake keys with placeholders, in every string of a value. */
+export function sanitizer(d) {
+  const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // each path in both separator forms, case-insensitively
+  const pathRe = (p) => new RegExp(esc(p).replace(/\\\\|\//g, "[\\\\/]+"), "gi");
+  const pairs = [
+    [pathRe(d.stateDir), "<STATE_DIR>"],
+    [pathRe(d.cwd), "<WORKSPACE>"],
+    [pathRe(d.homeDir), "<HOME>"],
+    [pathRe(MISSING_EXE), "<A_PATH_WITH_NO_PROGRAM_AT_IT>"],
+    [pathRe(STUB_EXE), "<CLAUDE_EXE>"],
+    [pathRe(STUB_SCRIPT), "<STUB_SCRIPT>"],
+    [pathRe(path.win32.normalize(NODE_PROJECT)), "<TARSEE_ROOT>"],
+    [pathRe(path.win32.normalize(process.env.TARSEE_WORKSPACE_DIR)), "<TARSEE_WORKSPACE_DIR>"],
+    [pathRe(path.win32.normalize(process.execPath)), "<NODE_EXE>"],
+    [new RegExp(esc(KEYS.anthropic), "g"), "<ANTHROPIC_KEY>"],
+    [new RegExp(esc(KEYS.anthropic.slice(-20)), "g"), "<LAST_20_OF_ANTHROPIC_KEY>"],
+    [new RegExp(esc(KEYS.deepseek), "g"), "<DEEPSEEK_KEY>"],
+    [new RegExp(esc(KEYS.openrouter), "g"), "<OPENROUTER_KEY>"],
+    [new RegExp(esc(KEYS.planToken), "g"), "<PLAN_OAUTH_TOKEN>"],
+    [new RegExp(esc(KEYS.canaryApiKey), "g"), "<SERVER_ENV_API_KEY>"],
+  ];
+  const str = (s) => pairs.reduce((acc, [re, to]) => acc.replace(re, to), s);
+  const walk = (v) => {
+    if (typeof v === "string") return str(v);
+    if (Array.isArray(v)) return v.map(walk);
+    if (isObj(v)) return Object.fromEntries(Object.entries(v).map(([k, x]) => [str(k), walk(x)]));
+    return v;
+  };
+  return walk;
+}
+
+/** Environment names whose values go in a fixture (everything else is listed by name only). */
+const VALUE_NAMES = /^(ANTHROPIC_|CLAUDE_|CLAUDECODE|BASH_MAX_OUTPUT_LENGTH$|MAX_MCP_OUTPUT_TOKENS$|NODE_OPTIONS$|DEBUG$|NODE_ENV$|ENCRYPTION_KEY$|OPENROUTER_API_KEY$|MY_SERVICE_API_KEY$)/i;
+export function envView(env) {
+  const names = Object.keys(env).sort();
+  const values = {};
+  for (const k of names) if (VALUE_NAMES.test(k)) values[k] = env[k];
+  return { names, values };
+}
+
+/**
+ * Names Windows process start fills in from the parent process when the environment handed over lacks them (seen by
+ * starting a child with one made-up variable only). They are not the SDK's doing, and their values are this machine's.
+ */
+const WINDOWS_FILLED = new Set(["HOMEDRIVE", "HOMEPATH", "LOGONSERVER", "PATH", "SYSTEMDRIVE", "SYSTEMROOT", "TEMP", "USERDOMAIN", "USERNAME", "USERPROFILE", "WINDIR"]);
+
+/** What the SDK did to the environment it was given: names added, removed, and changed. */
+export function envDiff(given, received) {
+  const up = (o) => new Map(Object.keys(o).map((k) => [k.toUpperCase(), k]));
+  const g = up(given), r = up(received);
+  const added = {}, removed = [], changed = {}, filled = [];
+  for (const [U, k] of r) if (!g.has(U)) { if (WINDOWS_FILLED.has(U)) filled.push(k); else added[k] = received[k]; }
+  for (const [U, k] of g) {
+    if (!r.has(U)) removed.push(k);
+    else if (String(given[k]) !== String(received[r.get(U)])) changed[k] = { given: given[k], received: received[r.get(U)] };
+  }
+  return { added, removed: removed.sort(), changed, filled_in_by_windows_process_start_not_the_sdk: filled.sort() };
+}
+
+/** The SDK options as plain data: the live objects named, the environment as names plus the values that matter. */
+export function optionsView(options) {
+  const o = { ...options };
+  if (o.env) o.env = envView(o.env);
+  if (o.abortController) o.abortController = "<AbortController>";
+  if (typeof o.stderr === "function") o.stderr = "<function: keeps the last 2000 characters>";
+  if (o.mcpServers) {
+    o.mcpServers = Object.fromEntries(Object.entries(o.mcpServers).map(([k, v]) => {
+      const { instance, ...rest } = v;
+      return [k, instance ? { ...rest, instance: "<McpServer: the in-process tarsee server, createSdkMcpServer({name:'tarsee',version:'1.0.0',tools})>" } : rest];
+    }));
+  }
+  delete o.pathToClaudeCodeExecutable;
+  delete o.spawnClaudeCodeProcess;
+  return o;
+}
+
+function setStub(record, scenario, extra = {}) {
+  fs.writeFileSync(`${STUB_DIR}/stub-config.json`, JSON.stringify({ record, scenario, ...extra }));
+}
+
+/**
+ * Run one turn of Tarsee's engine against the stub.
+ *   name, description
+ *   providerId, model, effort
+ *   runOpts     passed to run(): messages, systemPrompt | systemParts, sessionId, sessionHandle, media, maxTurns,
+ *               maxBudgetUsd, thinkingSummaries
+ *   mcp         true: hand the engine the real in-process tarsee MCP server (createTarseeMcp({}))
+ *   missingProgram  true: point the SDK at a path where there is no program
+ *   mcpServer   instead of mcp: a server config put in options.mcpServers.tarsee as it is (an HTTP server, say)
+ *   scenario    the stub's stdout script (see stub-claude.mjs)
+ *   mode        "native" (default) or "hook"
+ *   envExtra    extra server environment
+ *   vaultEnv    the vault's keys (default one made-up key)
+ *   abortAfter  (event) => boolean: abort the turn's signal when it returns true
+ *   depsExtra   extra deps for run()
+ */
+export async function capture(c) {
+  const d = dirsFor(c.name);
+  const clean = sanitizer(d);
+  const record = `${d.root}/stub-record.json`;
+  setStub(record, c.scenario || "turn", { sdkServers: !!c.mcp });
+  const env = serverEnv(d, c.envExtra || {});
+  const seen = { options: null, prompt: null, spawn: null, kills: [], childExit: null, sdkMessages: [], abortAt: null };
+  const t0 = Date.now();
+  const t = () => Date.now() - t0;
+
+  const query = ({ prompt, options }) => {
+    seen.options = options;
+    let teePrompt = prompt;
+    if (typeof prompt === "string") seen.prompt = prompt;
+    else {
+      seen.prompt = [];
+      teePrompt = (async function* () { for await (const m of prompt) { seen.prompt.push(m); yield m; } })();
+    }
+    const extra = c.mode === "hook"
+      ? {
+        spawnClaudeCodeProcess(spec) {
+          seen.spawn = { t: t(), command: spec.command, args: spec.args, cwd: spec.cwd, env: { ...spec.env }, hasSignal: !!spec.signal };
+          const child = spawn(process.execPath, [STUB_SCRIPT, ...spec.args], { cwd: spec.cwd, env: spec.env, stdio: ["pipe", "pipe", "pipe"], signal: spec.signal, windowsHide: true });
+          child.on("error", (e) => seen.kills.push({ t: t(), event: `child error: ${e.name}: ${e.message}` }));
+          const kill = child.kill.bind(child);
+          child.kill = (sig) => { seen.kills.push({ t: t(), event: "kill()", signal: sig ?? "(default SIGTERM)", exitCodeBefore: child.exitCode }); return kill(sig); };
+          const end = child.stdin.end.bind(child.stdin);
+          child.stdin.end = (...a) => { seen.kills.push({ t: t(), event: "stdin.end()" }); return end(...a); };
+          child.on("exit", (code, signal) => { seen.childExit = { t: t(), code, signal }; });
+          spec.signal?.addEventListener("abort", () => seen.kills.push({ t: t(), event: "spawn signal aborted (Node then kills the child with its default signal)" }));
+          return child;
+        },
+      }
+      : { pathToClaudeCodeExecutable: c.missingProgram ? MISSING_EXE : STUB_EXE };
+    const it = sdk.query({ prompt: teePrompt, options: { ...options, ...extra } });
+    return (async function* () {
+      try { for await (const m of it) { seen.sdkMessages.push({ t: t(), type: m.type, subtype: m.subtype ?? m.event?.type }); yield m; } }
+      catch (e) { seen.sdkError = { t: t(), name: e?.name, message: String(e?.message || e) }; throw e; }
+    })();
+  };
+
+  const ac = new AbortController();
+  const events = [];
+  const logs = [];
+  const orig = { log: console.log, warn: console.warn, error: console.error };
+  for (const k of Object.keys(orig)) console[k] = (...a) => logs.push(`${k}: ${a.map((x) => (x instanceof Error ? `${x.name}: ${x.message}` : typeof x === "string" ? x : JSON.stringify(x))).join(" ")}`);
+  try {
+    const runOpts = c.runOpts || {};
+    for await (const e of engine.run({
+      target: { providerId: c.providerId, model: c.model, effort: c.effort },
+      messages: [{ role: "user", content: "say hi" }],
+      signal: ac.signal,
+      ...runOpts,
+      deps: {
+        query, env, stateDir: d.stateDir, homeDir: d.homeDir, cwd: d.cwd,
+        key: KEYS[c.providerId], mcpServer: c.mcpServer ?? (c.mcp ? createTarseeMcp({}, { quiet: true }) : null),
+        vaultEnv: c.vaultEnv ?? { MY_SERVICE_API_KEY: "vault-value-for-scripts-1" },
+        resolveModel, isTranscriptOverCap: () => false,
+        ...(c.depsExtra || {}),
+      },
+    })) {
+      events.push({ t: t(), ...e });
+      if (c.abortAfter && !ac.signal.aborted && c.abortAfter(e)) { seen.abortAt = t(); ac.abort(); }
+    }
+  } finally {
+    Object.assign(console, orig);
+  }
+  // let a killed or closing stub finish writing its record
+  await new Promise((r) => setTimeout(r, c.settleMs ?? 400));
+  let stub = null;
+  try { stub = JSON.parse(fs.readFileSync(record, "utf8")); } catch { /* the stub never started */ }
+
+  const given = seen.options?.env || {};
+  const received = stub?.env || seen.spawn?.env || null; // null: the program never started
+  const fixture = clean({
+    name: c.name,
+    description: c.description,
+    how: c.mode === "hook"
+      ? "hook: options.spawnClaudeCodeProcess recorded the command the SDK would start; the harness started the stub itself and logged every kill()"
+      : "native: the SDK started the stub program itself (pathToClaudeCodeExecutable), exactly as it starts claude.exe",
+    tarsee_run_opts: { target: { providerId: c.providerId, model: c.model, effort: c.effort }, messages: [{ role: "user", content: "say hi" }], ...viewRunOpts(c.runOpts || {}), mcpServer: c.mcpServer ? c.mcpServer : c.mcp ? "createTarseeMcp({})" : null },
+    sdk_query: { prompt: seen.prompt, options: seen.options ? optionsView(seen.options) : null },
+    spawn: {
+      command: seen.spawn ? seen.spawn.command : c.missingProgram ? MISSING_EXE : "<CLAUDE_EXE>",
+      argv: stub?.argv ?? seen.spawn?.args ?? null,
+      cwd: stub?.cwd ?? seen.spawn?.cwd ?? null,
+      stdio: "stdin, stdout and stderr are pipes; windowsHide: true",
+    },
+    env: {
+      given_to_sdk: seen.options ? envView(given) : null,
+      received_by_program: received ? envView(received) : null,
+      sdk_changes: seen.options && received ? envDiff(given, received) : null,
+    },
+    stdin: stub?.stdin ?? null,
+    stdin_events: stub?.events ?? null,
+    stdout_script: c.scenario || "turn",
+    stdout_played: stub?.stdout ?? null,
+    ...(c.mode === "hook" ? { sdk_process_calls: seen.kills, child_exit: seen.childExit, abort_at_ms: seen.abortAt } : {}),
+    ...(seen.sdkError ? { sdk_error_thrown: seen.sdkError } : {}),
+    sdk_messages_seen_by_tarsee: seen.sdkMessages,
+    tarsee_events: events,
+    tarsee_logs: logs,
+  });
+  return { fixture, stub, seen, events, d };
+}
+
+function viewRunOpts(o) {
+  const v = { ...o };
+  delete v.signal;
+  return v;
+}
+
+/** Shorten long base64 payloads and long texts inside a fixture so it stays readable; lengths are kept. */
+export function shorten(v, max = 400) {
+  if (typeof v === "string") return v.length > max ? `${v.slice(0, max)}…<${v.length} characters in all>` : v;
+  if (Array.isArray(v)) return v.map((x) => shorten(x, max));
+  if (isObj(v)) return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, shorten(x, max)]));
+  return v;
+}

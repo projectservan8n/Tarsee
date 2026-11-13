@@ -1,0 +1,356 @@
+{
+ "name": "checked-03-sdk-stdout-and-exit",
+ "what": "What the SDK hands over, and what it throws, for stdout a stub printed (line ends of every kind, characters a line reader might split on, lines that are not JSON or not objects, a very long line, a character cut in two) and for each way a stub exited (codes, stderr of every size, bytes that are not UTF-8).",
+ "made_with": {
+  "sdk": "@openai/codex-sdk 0.167.0, called directly",
+  "stub": "scripts/checked-stub-exec.js.txt, run by node itself as the program",
+  "script": "scripts/checked-capture.mjs.txt",
+  "platform": "win32, Node 22.18"
+ },
+ "stdoutReading": {
+  "crlf_loneCR_noFinalNewline": {
+   "stdout": "{\"type\":\"a\"}\r\n{\"type\":\"b\"}\r{\"type\":\"c\"}\n{\"type\":\"d\"}",
+   "yielded": [
+    {
+     "type": "a"
+    },
+    {
+     "type": "b"
+    },
+    {
+     "type": "c"
+    },
+    {
+     "type": "d"
+    }
+   ],
+   "threw": null,
+   "stubLastAliveMs": "3",
+   "stubExitedAtMs": 17,
+   "uncaught": []
+  },
+  "u2028_inside_a_string": {
+   "stdout": "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"before after end\"}}\n{\"type\":\"z\"}\n",
+   "yielded": [
+    {
+     "type": "item.completed",
+     "item": {
+      "id": "item_0",
+      "type": "agent_message",
+      "text": "before after end"
+     }
+    },
+    {
+     "type": "z"
+    }
+   ],
+   "threw": null,
+   "stubLastAliveMs": "31",
+   "stubExitedAtMs": 70,
+   "uncaught": []
+  },
+  "nel_inside_a_string": {
+   "stdout": "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"beforeafter\"}}\n",
+   "yielded": [
+    {
+     "type": "item.completed",
+     "item": {
+      "id": "item_0",
+      "type": "agent_message",
+      "text": "beforeafter"
+     }
+    }
+   ],
+   "threw": null,
+   "stubLastAliveMs": "7",
+   "stubExitedAtMs": 19,
+   "uncaught": []
+  },
+  "blank_line": {
+   "stdout": "{\"type\":\"a\"}\n\n{\"type\":\"b\"}\n",
+   "yielded": [
+    {
+     "type": "a"
+    }
+   ],
+   "threw": {
+    "name": "Error",
+    "message": "Failed to parse item: ",
+    "code": null,
+    "cause": {
+     "name": "SyntaxError",
+     "message": "Unexpected end of JSON input"
+    }
+   },
+   "stubLastAliveMs": "2",
+   "stubExitedAtMs": null,
+   "uncaught": []
+  },
+  "whitespace_line": {
+   "stdout": "{\"type\":\"a\"}\n   \n{\"type\":\"b\"}\n",
+   "yielded": [
+    {
+     "type": "a"
+    }
+   ],
+   "threw": {
+    "name": "Error",
+    "message": "Failed to parse item:    ",
+    "code": null,
+    "cause": {
+     "name": "SyntaxError",
+     "message": "Unexpected end of JSON input"
+    }
+   },
+   "stubLastAliveMs": "3",
+   "stubExitedAtMs": null,
+   "uncaught": []
+  },
+  "not_json": {
+   "stdout": "{\"type\":\"a\"}\nwarning: something\n{\"type\":\"b\"}\n",
+   "yielded": [
+    {
+     "type": "a"
+    }
+   ],
+   "threw": {
+    "name": "Error",
+    "message": "Failed to parse item: warning: something",
+    "code": null,
+    "cause": {
+     "name": "SyntaxError",
+     "message": "Unexpected token 'w', \"warning: something\" is not valid JSON"
+    }
+   },
+   "stubLastAliveMs": "3",
+   "stubExitedAtMs": null,
+   "uncaught": []
+  },
+  "json_but_not_object": {
+   "stdout": "{\"type\":\"a\"}\n42\n\"str\"\nnull\n{\"type\":\"b\"}\n",
+   "yielded": [
+    {
+     "type": "a"
+    },
+    42,
+    "str"
+   ],
+   "threw": {
+    "name": "TypeError",
+    "message": "Cannot read properties of null (reading 'type')",
+    "code": null,
+    "cause": null
+   },
+   "stubLastAliveMs": "2",
+   "stubExitedAtMs": null,
+   "uncaught": []
+  },
+  "bom_first": {
+   "stdout": "﻿{\"type\":\"a\"}\n",
+   "yielded": [],
+   "threw": {
+    "name": "Error",
+    "message": "Failed to parse item: ﻿{\"type\":\"a\"}",
+    "code": null,
+    "cause": {
+     "name": "SyntaxError",
+     "message": "Unexpected token '﻿', \"﻿{\"type\":\"a\"}\" is not valid JSON"
+    }
+   },
+   "stubLastAliveMs": "3",
+   "stubExitedAtMs": null,
+   "uncaught": []
+  },
+  "turn_completed_no_usage": {
+   "stdout": "{\"type\":\"turn.completed\"}\n",
+   "yielded": [],
+   "threw": {
+    "name": "TypeError",
+    "message": "Cannot read properties of undefined (reading 'cache_write_input_tokens')",
+    "code": null,
+    "cause": null
+   },
+   "stubLastAliveMs": "4",
+   "stubExitedAtMs": null,
+   "uncaught": []
+  },
+  "long_line_300k": {
+   "stdout": "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx... (300095 chars)",
+   "yielded": [
+    {
+     "type": "item.completed",
+     "textLength": 300000
+    },
+    {
+     "type": "b"
+    }
+   ],
+   "threw": null,
+   "stubLastAliveMs": "5",
+   "stubExitedAtMs": 15,
+   "uncaught": []
+  },
+  "split_utf8_across_writes": {
+   "yielded": [
+    {
+     "type": "item.completed",
+     "item": {
+      "id": "item_0",
+      "type": "agent_message",
+      "text": "☃😀"
+     }
+    }
+   ],
+   "threw": null
+  }
+ },
+ "exitCodes": {
+  "nonzero_after_events": {
+   "plan": {
+    "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"01a1c000-0000-7000-8000-0000000000cc\"}\n{\"type\":\"turn.failed\",\"error\":{\"message\":\"boom\"}}\n",
+    "stderr": "Reading prompt from stdin...\n",
+    "exitCode": 1
+   },
+   "yielded": [
+    {
+     "type": "thread.started",
+     "thread_id": "01a1c000-0000-7000-8000-0000000000cc"
+    },
+    {
+     "type": "turn.failed",
+     "error": {
+      "message": "boom"
+     }
+    }
+   ],
+   "threw": {
+    "name": "Error",
+    "message": "Codex Exec exited with code 1: Reading prompt from stdin...\n",
+    "code": null,
+    "cause": null
+   },
+   "uncaught": []
+  },
+  "nonzero_no_output_stderr": {
+   "plan": {
+    "stdout": "",
+    "stderr": "Reading prompt from stdin...\nError: thread/resume: thread/resume failed: no rollout found for thread id x (code -32600)\n",
+    "exitCode": 1
+   },
+   "yielded": [],
+   "threw": {
+    "name": "Error",
+    "message": "Codex Exec exited with code 1: Reading prompt from stdin...\nError: thread/resume: thread/resume failed: no rollout found for thread id x (code -32600)\n",
+    "code": null,
+    "cause": null
+   },
+   "uncaught": []
+  },
+  "zero_with_stderr": {
+   "plan": {
+    "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"01a1c000-0000-7000-8000-0000000000cc\"}\n{\"type\":\"turn.started\"}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"hi\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":10,\"cached_input_tokens\":2,\"cache_write_input_tokens\":0,\"output_tokens\":3,\"reasoning_output_tokens\":1}}\n",
+    "stderr": "Reading prompt from stdin...\nsome warning\n",
+    "exitCode": 0
+   },
+   "yielded": [
+    {
+     "type": "thread.started",
+     "thread_id": "01a1c000-0000-7000-8000-0000000000cc"
+    },
+    {
+     "type": "turn.started"
+    },
+    {
+     "type": "item.completed",
+     "item": {
+      "id": "item_0",
+      "type": "agent_message",
+      "text": "hi"
+     }
+    },
+    {
+     "type": "turn.completed",
+     "usage": {
+      "input_tokens": 10,
+      "cached_input_tokens": 2,
+      "cache_write_input_tokens": 0,
+      "output_tokens": 3,
+      "reasoning_output_tokens": 1
+     }
+    }
+   ],
+   "threw": null,
+   "uncaught": []
+  },
+  "zero_no_output": {
+   "plan": {
+    "stdout": "",
+    "exitCode": 0
+   },
+   "yielded": [],
+   "threw": null,
+   "uncaught": []
+  },
+  "code_2": {
+   "plan": {
+    "stdout": "",
+    "stderr": "error: unexpected argument '--bogus' found\n",
+    "exitCode": 2
+   },
+   "yielded": [],
+   "threw": {
+    "name": "Error",
+    "message": "Codex Exec exited with code 2: error: unexpected argument '--bogus' found\n",
+    "code": null,
+    "cause": null
+   },
+   "uncaught": []
+  },
+  "code_255": {
+   "plan": {
+    "stdout": "",
+    "stderr": "",
+    "exitCode": 255
+   },
+   "yielded": [],
+   "threw": {
+    "name": "Error",
+    "message": "Codex Exec exited with code 255: ",
+    "code": null,
+    "cause": null
+   },
+   "uncaught": []
+  },
+  "stderr_200k": {
+   "plan": {
+    "stdout": "",
+    "stderr": "200001 chars",
+    "exitCode": 3
+   },
+   "yielded": [],
+   "threw": {
+    "name": "Error",
+    "message": "Codex Exec exited with code 3: EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE... (200032 chars)",
+    "code": null,
+    "cause": null
+   },
+   "uncaught": []
+  },
+  "stderr_not_utf8": {
+   "plan": {
+    "stdout": "",
+    "stderr": "YmFk//4K",
+    "stderr_base64": true,
+    "exitCode": 4
+   },
+   "yielded": [],
+   "threw": {
+    "name": "Error",
+    "message": "Codex Exec exited with code 4: bad��\n",
+    "code": null,
+    "cause": null
+   },
+   "uncaught": []
+  }
+ }
+}

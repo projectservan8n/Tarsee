@@ -1,0 +1,8 @@
+s22 no approval, not host-managed: apiKeySource="ANTHROPIC_API_KEY" result=success/false/"x" x-api-key sent=true authorization=none exit=0
+   .claude.json after: null
+s22 no approval, host-managed: apiKeySource="ANTHROPIC_API_KEY" result=success/false/"x" x-api-key sent=true authorization=none exit=0
+   .claude.json after: null
+s22 approved, host-managed: apiKeySource="ANTHROPIC_API_KEY" result=success/false/"x" x-api-key sent=true authorization=none exit=0
+   .claude.json after: {"approved":["VWXYZ0123456789-AAAA"],"rejected":[]}
+s22 rejected, host-managed: apiKeySource="ANTHROPIC_API_KEY" result=success/false/"x" x-api-key sent=true authorization=none exit=0
+   .claude.json after: {"approved":[],"rejected":["VWXYZ0123456789-AAAA"]}

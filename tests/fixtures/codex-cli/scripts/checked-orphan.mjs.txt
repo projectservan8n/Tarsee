@@ -1,0 +1,41 @@
+// When the server process itself is killed on Windows, does the program it started die with it?
+// A: a Node process that starts a child the way the SDK does (spawn, no options but env) and is then killed.
+// B: the Rust launcher (std::process::Command) doing the same.
+import fs from "node:fs";
+import path from "node:path";
+import { spawn, execFileSync } from "node:child_process";
+
+const SCRATCH = path.resolve(process.env.CAPTURE_SCRATCH);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const alive = (pid) => { try { return execFileSync("tasklist", ["/FI", `PID eq ${pid}`, "/NH"], { encoding: "utf8" }).includes(String(pid)); } catch { return null; } };
+const out = {};
+
+{
+  const pidFile = path.join(SCRATCH, "runs", "orphan-node-child.pid"); fs.rmSync(pidFile, { force: true });
+  const parent = spawn(process.execPath, ["-e", `const c=require('child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{env:process.env});require('fs').writeFileSync(${JSON.stringify(pidFile)},String(c.pid));setInterval(()=>{},1000)`], { stdio: "ignore", detached: true });
+  await sleep(1500);
+  const childPid = Number(fs.readFileSync(pidFile, "utf8"));
+  const before = alive(childPid);
+  execFileSync("taskkill", ["/F", "/PID", String(parent.pid)], { stdio: "ignore" });
+  await sleep(1500);
+  out.nodeParentKilled = { childAliveBefore: before, childAliveAfterTheParentWasKilled: alive(childPid) };
+  try { process.kill(childPid); } catch { /* gone */ }
+}
+{
+  const dir = path.join(SCRATCH, "runs", "rs-orphan"); fs.rmSync(dir, { recursive: true, force: true }); fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "program.txt"), process.execPath);
+  fs.writeFileSync(path.join(dir, "args.bin"), Buffer.from(["-e", "setInterval(()=>{},1000)"].map((s) => s + "\0").join("")));
+  fs.writeFileSync(path.join(dir, "opts.txt"), "keep_stdin_open_ms=60000");
+  const parent = spawn(path.join(SCRATCH, "rs", "launch.exe"), [dir], { stdio: "ignore", detached: true });
+  await sleep(1500);
+  // the launcher's child: the node process whose parent is the launcher
+  const list = execFileSync("powershell", ["-NoProfile", "-Command", `Get-CimInstance Win32_Process -Filter "ParentProcessId=${parent.pid}" | Select-Object -ExpandProperty ProcessId`], { encoding: "utf8" }).trim().split(/\s+/).filter(Boolean).map(Number);
+  const childPid = list[0];
+  const before = alive(childPid);
+  execFileSync("taskkill", ["/F", "/PID", String(parent.pid)], { stdio: "ignore" });
+  await sleep(1500);
+  out.rustParentKilled = { childFound: list.length, childAliveBefore: before, childAliveAfterTheParentWasKilled: alive(childPid) };
+  try { process.kill(childPid); } catch { /* gone */ }
+}
+fs.writeFileSync(path.join(SCRATCH, "out", "orphan-on-windows.json"), JSON.stringify(out, null, 1));
+console.log(JSON.stringify(out, null, 1));

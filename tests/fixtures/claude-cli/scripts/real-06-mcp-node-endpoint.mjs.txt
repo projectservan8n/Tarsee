@@ -1,0 +1,88 @@
+// Real CLI against Tarsee's OWN loopback MCP endpoint (the Node src/ai/mcp-http.js that Codex uses today, and that the
+// Rust ai/mcp_http.rs replaces): the program is pointed at it with --mcp-config, the bearer token comes from the
+// environment (${TARSEE_MCP_TOKEN}), and the fake Messages API scripts a call to tarsee_datetime, then a Bash command
+// that says whether the token is in the agent's shell.
+import fs from "node:fs";
+import http from "node:http";
+import { pathToFileURL } from "node:url";
+import { SCRATCH, NODE_PROJECT } from "./capture-lib.mjs"; // sets Tarsee's folders to the scratch folder first
+import { drive, gatewayEnv, baseArgs, initRequest, userText, startFakeAnthropic } from "./real-drive.mjs";
+
+const { startMcpHttp, grantTurn, stopMcpHttp } = await import(pathToFileURL(`${NODE_PROJECT}/src/ai/mcp-http.js`).href);
+fs.mkdirSync(`${SCRATCH}/real`, { recursive: true });
+
+const toolNames = (body) => (body?.tools || []).map((x) => x.name);
+const toolResults = (body) => (body?.messages || []).flatMap((m) => (Array.isArray(m.content) ? m.content.filter((b) => b.type === "tool_result") : []));
+
+const quiet = console.log; console.log = () => {};
+const endpoint = await startMcpHttp({ stateDir: `${SCRATCH}/tarsee-state` });
+console.log = quiet;
+// a recording pass-through in front of the endpoint, to see the requests (the endpoint itself logs nothing)
+const seen = [];
+const front = http.createServer((req, res) => {
+  const chunks = [];
+  req.on("data", (c) => chunks.push(c));
+  req.on("end", () => {
+    const raw = Buffer.concat(chunks);
+    let body = null; try { body = JSON.parse(raw.toString("utf8")); } catch { /* none */ }
+    const entry = { method: req.method, path: req.url, headers: { ...req.headers }, body };
+    seen.push(entry);
+    const up = http.request({ host: "127.0.0.1", port: endpoint.port, path: req.url, method: req.method, headers: { ...req.headers, host: `127.0.0.1:${endpoint.port}` } }, (r) => {
+      const out = [];
+      r.on("data", (c) => out.push(c));
+      r.on("end", () => {
+        const text = Buffer.concat(out).toString("utf8");
+        entry.status = r.statusCode; entry.responseHeaders = r.headers;
+        try { entry.response = JSON.parse(text); } catch { entry.response = text; }
+        res.writeHead(r.statusCode, r.headers); res.end(text);
+      });
+    });
+    up.on("error", (e) => { entry.error = String(e); res.writeHead(502); res.end(); });
+    up.end(raw);
+  });
+});
+await new Promise((r) => front.listen(0, "127.0.0.1", r));
+const frontUrl = `http://127.0.0.1:${front.address().port}/mcp`;
+
+const grant = await grantTurn({}, { turnId: "capture-turn-1" });
+const fake = await startFakeAnthropic({
+  script: (req) => {
+    const done = toolResults(req.body).length;
+    if (done === 0 && toolNames(req.body).includes("mcp__tarsee__tarsee_datetime")) return { toolUse: { id: "toolu_mcp_1", name: "mcp__tarsee__tarsee_datetime", input: { timezone: "UTC", format: "iso" } } };
+    if (done === 1) return { toolUse: { id: "toolu_bash_1", name: "Bash", input: { command: 'if [ -n "$TARSEE_MCP_TOKEN" ]; then echo MCP_TOKEN_IN_SHELL; else echo MCP_TOKEN_NOT_IN_SHELL; fi; if [ -n "$ANTHROPIC_AUTH_TOKEN" ]; then echo AUTH_TOKEN_IN_SHELL; else echo AUTH_TOKEN_NOT_IN_SHELL; fi', description: "look" } } };
+    return { text: done ? "Done." : "No tarsee tool was offered." };
+  },
+});
+try {
+  for (const [label, name, url] of [["straight at Tarsee's endpoint", "06-mcp-node-endpoint", grant.url], ["through a recording pass-through", "06-mcp-node-endpoint-recorded", frontUrl]]) {
+    fake.requests.length = 0;
+    const cfg = { mcpServers: { tarsee: { type: "http", url, headers: { Authorization: "Bearer ${TARSEE_MCP_TOKEN}" }, alwaysLoad: true } } };
+    const r = await drive({
+      name, args: baseArgs({ extra: ["--mcp-config", JSON.stringify(cfg)] }),
+      env: gatewayEnv(`${SCRATCH}/homes/${name}`, fake.url, { CLAUDE_CODE_SDK_READS_SESSION_STATE: "1", TARSEE_MCP_TOKEN: grant.token }), cwd: `${SCRATCH}/ws/${name}`,
+      stdin: [initRequest({ systemPrompt: ["You are a test."], systemPromptSnapshot: false }), userText("what time is it?")], timeoutMs: 120_000,
+    });
+    const msgs = r.stdout.map((o) => o.msg).filter(Boolean);
+    const init = msgs.find((m) => m.type === "system" && m.subtype === "init");
+    console.log(`\n===== ${label}: exit ${r.exitCode}; stderr ${JSON.stringify(r.stderr.slice(0, 300))}`);
+    console.log("  init.mcp_servers:", JSON.stringify(init?.mcp_servers));
+    console.log("  init.tools:", init?.tools.length, "tools;", init?.tools.filter((x) => x.startsWith("mcp__")).length, "of them mcp__tarsee__*:", JSON.stringify(init?.tools.filter((x) => x.startsWith("mcp__"))));
+    for (const m of msgs) {
+      if (m.type === "assistant" || m.type === "user") console.log(`  < ${m.type} ${JSON.stringify(m.message.content).slice(0, 400)}`);
+      if (m.type === "result") console.log(`  < result ${m.subtype} is_error=${m.is_error} result=${JSON.stringify(m.result)}`);
+    }
+    console.log("  tools offered in the first API request:", toolNames(fake.messages()[0]?.body).length, "; tarsee ones:", toolNames(fake.messages()[0]?.body).filter((x) => x.startsWith("mcp__")).length);
+    fs.writeFileSync(`${SCRATCH}/real/${name}.api-tools.json`, JSON.stringify(fake.messages().map((q) => toolNames(q.body)), null, 2));
+  }
+  console.log("\n  the endpoint saw (through the pass-through):");
+  for (const q of seen) {
+    console.log(`    ${q.method} ${q.path} -> ${q.status}  request=${JSON.stringify(q.body)?.slice(0, 300)}`);
+    console.log(`      response=${JSON.stringify(q.response)?.slice(0, 400)}  content-type=${q.responseHeaders?.["content-type"]}`);
+  }
+  fs.writeFileSync(`${SCRATCH}/real/06-mcp-node-endpoint.requests.json`, JSON.stringify(seen, null, 2).replaceAll(grant.token, "<TOKEN>"));
+} finally {
+  grant.revoke();
+  await fake.close();
+  await new Promise((r) => front.close(r));
+  await stopMcpHttp();
+}

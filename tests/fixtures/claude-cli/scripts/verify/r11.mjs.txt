@@ -1,0 +1,76 @@
+// What the first pass recorded and the second had not yet run again: a thinking block, a provider's own cost on
+// the stream, a refused sign-in token, the user-agent with the SDK's markers, a Bash call, and whether the agent's
+// shell can read the MCP token and the provider's key.
+import { startFakeApi, startMcp } from "./fakes.mjs";
+import { drive, initialize, userText, kinds } from "./drive.mjs";
+import { cleanEnv } from "./realenv.mjs";
+
+const only = process.argv.slice(2);
+const want = (n) => !only.length || only.includes(n);
+const args = (extra = [], { pre = [], model = "claude-sonnet-4-5" } = {}) => [
+  "--output-format", "stream-json", "--verbose", "--input-format", "stream-json", ...pre,
+  "--max-turns=50", `--model=${model}`,
+  "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*", "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+  ...extra, "--setting-sources=project", "--strict-mcp-config",
+  "--permission-mode=bypassPermissions", "--allow-dangerously-skip-permissions", "--include-partial-messages",
+];
+const short = (m) => JSON.stringify(m).slice(0, 420);
+
+if (want("s33")) {
+  console.log("\n=== s33 a thinking block, then words (--thinking=adaptive --thinking-display=summarized --effort=high)");
+  const api = await startFakeApi([{ thinking: "I should say ok.", text: "ok" }]);
+  const rec = await drive("s33-thinking-block", { args: args([], { pre: ["--thinking=adaptive", "--thinking-display=summarized", "--effort=high"], model: "claude-opus-4-8" }), env: { ANTHROPIC_BASE_URL: api.url }, initial: [initialize(), userText("think")] });
+  console.log("stdout:", kinds(rec));
+  for (const s of rec.stdout.filter((x) => x.json.type === "assistant")) console.log("assistant:", JSON.stringify({ id: s.json.message.id, content: s.json.message.content, stop_reason: s.json.message.stop_reason }));
+  for (const s of rec.stdout.filter((x) => x.json.type === "stream_event" && (x.json.event.type === "content_block_start" || x.json.event.delta?.type?.includes("thinking") || x.json.event.delta?.type === "signature_delta"))) console.log("event:", JSON.stringify(s.json.event));
+  console.log("thinking_tokens messages:", rec.stdout.filter((x) => x.json.subtype === "thinking_tokens").map((x) => short(x.json)).join("\n   "));
+  await api.close();
+}
+if (want("s34")) {
+  console.log("\n=== s34 a provider that puts its own cost on message_delta.usage and cache counts on message_start.usage");
+  const api = await startFakeApi([{ text: "ok", startUsage: { input_tokens: 5, cache_creation_input_tokens: 7, cache_read_input_tokens: 100, output_tokens: 1 }, deltaUsage: { output_tokens: 6, cost: 0.00042 } }]);
+  const rec = await drive("s34-usage-cost", { args: args([], { model: "anthropic/claude-sonnet-5" }), env: { ANTHROPIC_BASE_URL: api.url }, initial: [initialize(), userText("hi")] });
+  console.log("message_start usage:", JSON.stringify(rec.stdout.find((x) => x.json.event?.type === "message_start")?.json.event.message.usage));
+  console.log("message_delta usage:", JSON.stringify(rec.stdout.find((x) => x.json.event?.type === "message_delta")?.json.event.usage));
+  const r = rec.stdout.find((x) => x.json.type === "result")?.json;
+  console.log("result: total_cost_usd", r?.total_cost_usd, "usage", JSON.stringify({ input_tokens: r?.usage.input_tokens, cache_read_input_tokens: r?.usage.cache_read_input_tokens, cache_creation_input_tokens: r?.usage.cache_creation_input_tokens, output_tokens: r?.usage.output_tokens }), "modelUsage keys", Object.keys(r?.modelUsage ?? {}));
+  await api.close();
+}
+if (want("s35")) {
+  console.log("\n=== s35 a made-up CLAUDE_CODE_OAUTH_TOKEN that the API refuses with 401");
+  const api = await startFakeApi([{ status: 401, error: { type: "authentication_error", message: "OAuth token has expired. Please obtain a new token or refresh your existing token." } }]);
+  const env = cleanEnv({ ANTHROPIC_BASE_URL: api.url, CLAUDE_CODE_OAUTH_TOKEN: "<PLAN_OAUTH_TOKEN>" }); delete env.ANTHROPIC_AUTH_TOKEN;
+  const rec = await drive("s35-sign-in-token-refused", { args: args(), rawEnv: env, initial: [initialize(), userText("hi")] });
+  const r = rec.stdout.find((x) => x.json.type === "result")?.json; const a = rec.stdout.find((x) => x.json.type === "assistant")?.json;
+  console.log("apiKeySource:", rec.stdout.find((x) => x.json.subtype === "init")?.json.apiKeySource, "| assistant.error:", a?.error, "| words:", JSON.stringify(r?.result), "| status:", r?.api_error_status, "| exit:", rec.exit?.code);
+  console.log("authorization header sent:", api.requests.find((q) => q.body?.stream)?.headers.authorization ? "Bearer <the token>" : "none", "| x-api-key:", api.requests.find((q) => q.body?.stream)?.headers["x-api-key"] ? "sent" : "none");
+  await api.close();
+}
+if (want("s36")) {
+  console.log("\n=== s36 the user-agent the API sees, with and without the SDK's two markers");
+  for (const [name, env] of [["neither", {}], ["CLAUDE_CODE_ENTRYPOINT=sdk-ts", { CLAUDE_CODE_ENTRYPOINT: "sdk-ts" }], ["both", { CLAUDE_CODE_ENTRYPOINT: "sdk-ts", CLAUDE_AGENT_SDK_VERSION: "0.3.319" }]]) {
+    const api = await startFakeApi([{ text: "ok" }]);
+    await drive(`s36-user-agent-${name.replace(/[^a-z]+/gi, "-")}`, { args: args(), env: { ANTHROPIC_BASE_URL: api.url, ...env }, initial: [initialize(), userText("one")] });
+    const q = api.requests.find((x) => x.body?.stream);
+    console.log(`${name.padEnd(30)} user-agent: ${q.headers["user-agent"]} | first system block: ${q.body.system[0].text}`);
+    await api.close();
+  }
+}
+if (want("s37")) {
+  console.log("\n=== s37 a Bash call, and what the agent's shell can read (the MCP token from the environment; the provider's key, host-managed)");
+  const mcp = await startMcp({ token: "<TOKEN>" });
+  const seen = (name) => `$([ -n "$${name}" ] && echo IN_SHELL || echo NOT_IN_SHELL)`;
+  const command = `echo MCP_TOKEN=${seen("TARSEE_MCP_TOKEN")} PROVIDER_KEY=${seen("ANTHROPIC_AUTH_TOKEN")} VAULT_KEY=${seen("MY_VAULT_KEY")}`;
+  for (const [name, env] of [["host-managed", { CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1" }], ["not host-managed", {}]]) {
+    const api = await startFakeApi([{ tool: { id: "toolu_bash_1", name: "Bash", input: { command, description: "look at the environment" } } }, { text: "done" }]);
+    const rec = await drive(`s37-bash-${name.replace(/[^a-z]+/g, "-")}`, {
+      args: args(["--mcp-config", JSON.stringify({ mcpServers: { tarsee: { type: "http", url: mcp.url, headers: { Authorization: "Bearer ${TARSEE_MCP_TOKEN}" }, alwaysLoad: true } } })]),
+      env: { ANTHROPIC_BASE_URL: api.url, TARSEE_MCP_TOKEN: "<TOKEN>", MY_VAULT_KEY: "vault-value", ...env }, initial: [initialize(), userText("run it")], maxMs: 60000,
+    });
+    const u = rec.stdout.find((x) => x.json.type === "user")?.json;
+    const text = JSON.stringify({ message: u?.message, tool_use_result: u?.tool_use_result }).split("<TOKEN>").join("<the MCP token itself>").split("made-up-token-for-a-loopback-fake").join("<the provider key itself>");
+    console.log(`${name}: mcp ${JSON.stringify(rec.stdout.find((x) => x.json.subtype === "init")?.json.mcp_servers)} | exit ${rec.exit?.code}\n   ${text}`);
+    await api.close();
+  }
+  await mcp.close();
+}

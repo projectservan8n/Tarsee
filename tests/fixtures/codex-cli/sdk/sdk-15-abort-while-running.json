@@ -1,0 +1,107 @@
+{
+  "name": "sdk-15-abort-while-running",
+  "what": "The caller's AbortSignal fires 300 ms after the second event of a turn that is still running (the stub wrote two events and sleeps 30 s). When the stub stopped, what the SDK threw, and how long the iteration took to end.",
+  "made_with": {
+    "sdk": "@openai/codex-sdk 0.167.0, called directly",
+    "platform": "win32"
+  },
+  "sdk": {
+    "new Codex(options)": {
+      "env": {},
+      "codexPathOverride": "<CODEX_BIN>"
+    },
+    "thread": {
+      "method": "startThread"
+    },
+    "runStreamed(input, turnOptions)": {
+      "input": "hello",
+      "inputLength": {
+        "characters": 5,
+        "utf8Bytes": 5
+      },
+      "turnOptions": {
+        "signal": "<AbortSignal>"
+      }
+    },
+    "callerProcessEnvNames": [
+      "COMSPEC",
+      "FROM_PROCESS_ENV",
+      "NUMBER_OF_PROCESSORS",
+      "PATH",
+      "SYSTEMDRIVE",
+      "SYSTEMROOT",
+      "TEMP",
+      "TMP",
+      "TMPDIR"
+    ]
+  },
+  "child": {
+    "program": "<CODEX_BIN>",
+    "argv": [
+      "exec",
+      "--experimental-json"
+    ],
+    "cwd": "<CALLER_CWD>",
+    "envNames": [
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+      "PATH",
+      "SYSTEMDRIVE",
+      "SYSTEMROOT",
+      "TEMP"
+    ],
+    "envValues": {
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE": "codex_sdk_ts",
+      "PATH": "C:\\WINDOWS\\system32;C:\\WINDOWS"
+    },
+    "envNamesNotInEnvOption": [
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+      "PATH",
+      "SYSTEMDRIVE",
+      "SYSTEMROOT",
+      "TEMP"
+    ],
+    "stdin": {
+      "text": "hello",
+      "sameAsTheInput": true,
+      "bytes": 5,
+      "chunks": [
+        {
+          "at_ms": 8,
+          "bytes": 5
+        }
+      ],
+      "eof_at_ms": 8
+    }
+  },
+  "stub": {
+    "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"01a1c000-0000-7000-8000-0000000000bb\"}\n{\"type\":\"turn.started\"}\n",
+    "stderr": "",
+    "exitCode": 0,
+    "sleepMsBeforeExit": 30000
+  },
+  "sdkYielded": [
+    {
+      "type": "thread.started",
+      "thread_id": "01a1c000-0000-7000-8000-0000000000bb"
+    },
+    {
+      "type": "turn.started"
+    }
+  ],
+  "sdkThrew": {
+    "name": "AbortError",
+    "message": "The operation was aborted",
+    "code": "ABORT_ERR",
+    "cause": {
+      "name": "AbortError",
+      "message": "This operation was aborted"
+    }
+  },
+  "abort": {
+    "note": "abortedAtMs and iterationEndedAtMs are since runStreamed() was called; the stub's two values are on its own clock (ms since it started), written every 20 ms",
+    "abortedAtMs": 352,
+    "iterationEndedAtMs": 358,
+    "stubAliveWhenAbortFiredMs": 325,
+    "stubLastAliveMs": 325
+  }
+}

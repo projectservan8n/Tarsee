@@ -1,0 +1,97 @@
+// More claims about the real program: an unknown model id, no credential, an unreachable host, a 404, a retry,
+// the hidden thinking flags, and how the transcript folder is named.
+import fs from "node:fs";
+import path from "node:path";
+import { startFakeApi } from "./fakes.mjs";
+import { drive, initialize, userText, kinds } from "./drive.mjs";
+import { SCRATCH, HOME, cleanEnv } from "./realenv.mjs";
+
+const only = process.argv.slice(2);
+const want = (n) => !only.length || only.includes(n);
+const args = (extra = [], { model = "claude-sonnet-4-5", pre = [] } = {}) => [
+  "--output-format", "stream-json", "--verbose", "--input-format", "stream-json", ...pre,
+  "--max-turns=50", `--model=${model}`,
+  "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*", "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+  "--setting-sources=project", "--strict-mcp-config",
+  "--permission-mode=bypassPermissions", "--allow-dangerously-skip-permissions", "--include-partial-messages", ...extra,
+];
+const show = (rec) => {
+  const res = rec.stdout.find((s) => s.json.type === "result")?.json;
+  const a = rec.stdout.find((s) => s.json.type === "assistant")?.json;
+  console.log("stdout:", kinds(rec));
+  console.log("assistant:", JSON.stringify(a && { error: a.error, model: a.message?.model, text: a.message?.content?.[0]?.text, is_api_error_message: a.is_api_error_message, api_error: a.api_error }));
+  console.log("result:", JSON.stringify(res && { subtype: res.subtype, is_error: res.is_error, result: res.result, api_error_status: res.api_error_status, terminal_reason: res.terminal_reason, api_error: res.api_error }));
+  console.log("stderr:", JSON.stringify(rec.stderr.slice(0, 400)), "| exit:", JSON.stringify(rec.exit));
+};
+
+if (want("s23")) {
+  console.log("\n=== s23 a model id the program has no entry for: deepseek-flash[1m]");
+  const api = await startFakeApi([{ text: "ok" }]);
+  const rec = await drive("s23-unknown-model-id", { args: args([], { model: "deepseek-flash[1m]" }), env: { ANTHROPIC_BASE_URL: api.url, ANTHROPIC_MODEL: "deepseek-flash[1m]" }, initial: [initialize(), userText("hi")] });
+  show(rec);
+  console.log("model in the API request:", api.requests.filter((r) => r.body?.stream).map((r) => r.body.model), "init.model:", rec.stdout.find((s) => s.json.subtype === "init")?.json.model);
+  await api.close();
+}
+if (want("s24")) {
+  console.log("\n=== s24 no credential at all");
+  const api = await startFakeApi([{ text: "ok" }]);
+  const env = cleanEnv({ ANTHROPIC_BASE_URL: api.url }); delete env.ANTHROPIC_AUTH_TOKEN;
+  const rec = await drive("s24-no-credential", { args: args(), rawEnv: env, initial: [initialize(), userText("hi")] });
+  show(rec);
+  console.log("requests that reached the API:", api.requests.length, "apiKeySource:", rec.stdout.find((s) => s.json.subtype === "init")?.json.apiKeySource);
+  await api.close();
+}
+if (want("s25")) {
+  console.log("\n=== s25 nothing listening at the host");
+  const rec = await drive("s25-host-unreachable", { args: args(), env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:9" }, initial: [initialize(), userText("hi")], maxMs: 60000 });
+  show(rec);
+}
+if (want("s26")) {
+  console.log("\n=== s26 the API answers 404 for the model");
+  const api = await startFakeApi([{ status: 404, error: { type: "not_found_error", message: "model: no-such-model" } }]);
+  const rec = await drive("s26-model-404", { args: args([], { model: "no-such-model" }), env: { ANTHROPIC_BASE_URL: api.url }, initial: [initialize(), userText("hi")] });
+  show(rec);
+  await api.close();
+}
+if (want("s27")) {
+  console.log("\n=== s27 a 529, then an answer, with retries on (CLAUDE_CODE_MAX_RETRIES=2)");
+  const api = await startFakeApi([{ status: 529, error: { type: "overloaded_error", message: "Overloaded" } }, { text: "after the retry" }]);
+  const rec = await drive("s27-retry", { args: args(), env: { ANTHROPIC_BASE_URL: api.url, CLAUDE_CODE_MAX_RETRIES: "2" }, initial: [initialize(), userText("hi")], maxMs: 60000 });
+  show(rec);
+  console.log("api_retry:", JSON.stringify(rec.stdout.filter((s) => s.json.subtype === "api_retry").map((s) => s.json)));
+  await api.close();
+}
+if (want("s28")) {
+  console.log("\n=== s28 the flags that are not in --help: --thinking, --thinking-display, --effort");
+  const api = await startFakeApi([{ text: "ok" }]);
+  const rec = await drive("s28-thinking-flags", { args: args([], { pre: ["--thinking=adaptive", "--thinking-display=summarized", "--effort=high"], model: "claude-opus-4-8" }), env: { ANTHROPIC_BASE_URL: api.url }, initial: [initialize(), userText("hi")] });
+  show(rec);
+  const b = api.requests.find((r) => r.body?.stream)?.body;
+  console.log("request: thinking =", JSON.stringify(b?.thinking), "output_config =", JSON.stringify(b?.output_config), "max_tokens =", b?.max_tokens, "model =", b?.model);
+  await api.close();
+}
+if (want("s29")) {
+  console.log("\n=== s29 how the transcript folder is named");
+  const proj = path.join(HOME, ".claude", "projects");
+  const before = new Set(fs.existsSync(proj) ? fs.readdirSync(proj) : []);
+  const cases = [
+    ["odd characters", path.join(SCRATCH, "real", "ws2", "session ws.dir_1", "café (x)+[y]"), {}],
+    ["longer than 200", path.join(SCRATCH, "real", "ws2", "a".repeat(60), "b".repeat(60), "c".repeat(40)), {}],
+    ["CLAUDE_CODE_PROJECT_DIR_NAME", path.join(SCRATCH, "real", "ws2", "named"), { CLAUDE_CODE_PROJECT_DIR_NAME: "my_proj-1" }],
+  ];
+  for (const [name, cwd, env] of cases) {
+    const api = await startFakeApi([{ text: "ok" }]);
+    const rec = await drive(`s29-${name.replace(/[^a-zA-Z0-9]+/g, "-")}`, { args: args(), cwd, env: { ANTHROPIC_BASE_URL: api.url, ...env }, initial: [initialize(), userText("hi")] });
+    const sid = rec.stdout.find((s) => s.json.type === "result")?.json.session_id;
+    const now = fs.readdirSync(proj).filter((d) => !before.has(d));
+    for (const d of now) before.add(d);
+    const mine = fs.readdirSync(proj).filter((d) => fs.existsSync(path.join(proj, d, `${sid}.jsonl`)));
+    const rel = cwd.split("/").join("\\");
+    console.log(`${name}:\n   cwd (${rel.length} chars): ${rel.replace(SCRATCH.split("/").join("\\"), "<SCRATCH>")}\n   folder (${mine[0]?.length} chars): ${mine[0]}\n   plain rule gives (${rel.replace(/[^a-zA-Z0-9]/g, "-").length} chars): ${rel.replace(/[^a-zA-Z0-9]/g, "-") === mine[0] ? "the same" : rel.replace(/[^a-zA-Z0-9]/g, "-")}`);
+    if (mine[0] && rel.replace(/[^a-zA-Z0-9]/g, "-") !== mine[0] && rel.length > 200) {
+      let h = 0; for (let i = 0; i < rel.length; i++) h = ((h << 5) - h + rel.charCodeAt(i)) | 0;
+      console.log(`   first 200 + "-" + base36(|hash|): ${rel.replace(/[^a-zA-Z0-9]/g, "-").slice(0, 200)}-${Math.abs(h).toString(36)}  -> ${`${rel.replace(/[^a-zA-Z0-9]/g, "-").slice(0, 200)}-${Math.abs(h).toString(36)}` === mine[0] ? "MATCHES" : "does not match"}`);
+    }
+    await api.close();
+  }
+}

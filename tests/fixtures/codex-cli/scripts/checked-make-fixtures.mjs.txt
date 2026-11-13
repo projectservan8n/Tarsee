@@ -1,0 +1,159 @@
+// Turns the raw records of the independent check (out/*.json) into the fixtures under
+// tests/fixtures/codex-cli/checked/, with everything of the machine's own replaced by placeholders.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+const SCRATCH = path.resolve(process.env.CAPTURE_SCRATCH);
+const PROJECT = path.resolve(process.env.CAPTURE_PROJECT);
+const DEST = path.resolve(process.env.FIXTURES_DEST);
+const OUT = path.join(SCRATCH, "out");
+const rd = (n) => JSON.parse(fs.readFileSync(path.join(OUT, `${n}.json`), "utf8"));
+const text = (n) => fs.readFileSync(path.join(OUT, n), "utf8");
+
+// --- Placeholders ---------------------------------------------------------------------------------------------------
+const userHome = os.homedir();
+const userName = os.userInfo().username;
+const machine = os.hostname();
+const B8 = String.fromCharCode(92).repeat(8);
+const variants = (s) => [...new Set([s, s.split(String.fromCharCode(92)).join(B8), s.replace(/\\/g, "/"), s.replace(/\\/g, "\\\\"), s.replace(/\\/g, "\\\\\\\\"), s.replace(/\//g, "\\"), s.replace(/\//g, "\\\\"), s.toLowerCase(), s.replace(/^([A-Za-z]):/, (m, d) => `${d.toLowerCase()}:`), s.replace(/^([A-Za-z]):\\/, (m, d) => `/mnt/${d.toLowerCase()}/`).replace(/\\/g, "/")])];
+const pairs = [
+  [path.join(SCRATCH, "state-engine", "workspace"), "<WORKSPACE>"], [path.join(SCRATCH, "state", "workspace"), "<WORKSPACE>"], [path.join(SCRATCH, "ws"), "<WORKSPACE>"],
+  [path.join(SCRATCH, "state-engine"), "<STATE_DIR>"], [path.join(SCRATCH, "state"), "<STATE_DIR>"],
+  [path.join(SCRATCH, "tmp-engine"), "<TMP>"], [path.join(SCRATCH, "tmp"), "<TMP>"],
+  [path.join(SCRATCH, "home", "user"), "<USER_HOME>"],
+  [SCRATCH, "<SCRATCH>"], [path.join(PROJECT, "src", "skills"), "<TARSEE_SKILLS_DIR>"], [PROJECT, "<TARSEE_ROOT>"],
+  [process.execPath, "<NODE>"], [userHome, "<USER_HOME>"], [process.env.SYSTEMROOT || "C:\\WINDOWS", "<SYSTEMROOT>"],
+];
+function scrub(objOrText) {
+  let t = typeof objOrText === "string" ? objOrText : JSON.stringify(objOrText, null, 1);
+  for (const [from, to] of pairs) for (const v of variants(from)) t = t.split(v).join(to);
+  t = t.split("/tmp/verify-codex-runs").join("<RUNS>");
+  t = t.replace(/[A-Za-z]:(?:\\\\|\\|\/)Windows(?=[\\\/"])/gi, "<SYSTEMROOT>");
+  for (const [from, to] of [[machine, "<MACHINE_NAME>"], [userName, "<USER>"], [userName.replace(/'/g, "\\u0027"), "<USER>"]]) if (from) t = t.split(from).join(to);
+  t = t.replace(/Asia\/[A-Za-z_]+/g, "<TIMEZONE>").replace(/"installation_id\\":\\"[0-9a-f-]{36}/g, "\"installation_id\\\":\\\"<INSTALLATION_ID>").replace(/Windows 10\.0\.\d+; x86_64/g, "<SYSTEM>");
+  t = t.replace(/127\.0\.0\.1:(?!9\b|1\b|45123\b|5555\b)\d{4,5}/g, "127.0.0.1:<PORT>");
+  return t;
+}
+const made = [];
+function emit(name, what, madeWith, body) {
+  fs.mkdirSync(DEST, { recursive: true });
+  const t = scrub({ name, what, made_with: madeWith, ...body });
+  JSON.parse(t); // still JSON after the replacements
+  fs.writeFileSync(path.join(DEST, `${name}.json`), t + "\n");
+  made.push(`${name}.json (${t.length} bytes)`);
+}
+const WIN = { sdk: "@openai/codex-sdk 0.167.0, called directly", stub: "scripts/checked-stub-exec.js.txt, run by node itself as the program", script: "scripts/checked-capture.mjs.txt", platform: "win32, Node 22.18" };
+const pick = (o, keys) => Object.fromEntries(keys.filter((k) => o?.[k] !== undefined).map((k) => [k, o[k]]));
+const short = (s, n = 400) => (typeof s === "string" && s.length > n ? `${s.slice(0, n)}… (${s.length} characters)` : s);
+
+// --- 01: the SDK's argument list and environment ------------------------------------------------------------------
+{
+  const a1 = rd("a1-every-option"); const a2 = rd("a2-resumed-other-forms"); const a3 = rd("a3-no-options"); const a5 = rd("a5-empty-env"); const a12 = rd("a12-program-missing"); const a16 = rd("a16-two-turns-one-thread"); const a17 = rd("a17-refused-by-the-sdk");
+  emit("checked-01-sdk-arguments", "The real SDK called directly with every option it has, and with the awkward values a config can hold: the argument list in order, what reaches stdin, the environment. Then what the SDK refuses before it starts anything, a program that is not there, and two turns on one thread object.", WIN, {
+    everyOption: { given: "scenario a1 of the script: config with strings, numbers, booleans, arrays, tables, keys that look like integers, a dotted key and a key with a space; configOverrides; baseUrl; apiKey beside an env that has CODEX_API_KEY; every thread and turn option; two texts and two pictures", args: a1.args.map((x) => (x.includes("codex-output-schema-") ? "<TMP>\\codex-output-schema-<RANDOM>\\schema.json" : x)), stdin: a1.stdin.text, envNames: a1.envNames, envValues: pick(a1.env, ["CODEX_API_KEY", "CODEX_INTERNAL_ORIGINATOR_OVERRIDE", "ONLY"]), cwdIsTheCallersOwn: a1.cwdIsCallerCwd },
+    resumed: { given: "resumeThread(id) with threadSource, sandboxMode read-only, skipGitRepoCheck false, networkAccessEnabled true, webSearchEnabled false, no additional directories, an env that has its own CODEX_INTERNAL_ORIGINATOR_OVERRIDE, and an input of one picture and no text", args: a2.resumed.args, stdinBytes: a2.resumed.stdin.bytes, CODEX_INTERNAL_ORIGINATOR_OVERRIDE: a2.resumed.env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE },
+    webSearchEnabledTrue_originatorEmpty: { given: "webSearchEnabled true; env has CODEX_INTERNAL_ORIGINATOR_OVERRIDE set to an empty string; input an empty string", args: a2.webSearchTrue.args, stdinBytes: a2.webSearchTrue.stdin.bytes, CODEX_INTERNAL_ORIGINATOR_OVERRIDE: a2.webSearchTrue.env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE },
+    noOptions: { args: a3.args, namesTheCallerHasThatTheChildLacks: a3.childLacks, namesTheChildHasThatTheCallerLacks: a3.childHasExtra },
+    emptyEnv: { given: "env: {}", childEnvNames: a5.empty.envNames },
+    lowercaseNames: { given: "env: { path, systemroot, Temp }", childEnvNames: Object.keys(a5.lowercase.env).sort() },
+    programMissing: { threw: a12.threw, errno: a12.threwErrno, syscall: a12.threwSyscall, yielded: a12.yielded },
+    twoTurnsOnOneThreadObject: a16,
+    refusedByTheSdk: a17,
+  });
+}
+
+// --- 02: Tarsee's own options, through the SDK ---------------------------------------------------------------------
+{
+  const view = (n) => { const s = rd(n); return { target: s.tarsee.target, args: s.args, stdin: s.stdin.text, environment: { namesGivenToTheSdk: s.tarsee.envOptionNames, namesTheChildHasBesides: s.envNamesChildHasThatOptionLacks, namesGivenThatTheChildLacks: s.envNamesOptionHasThatChildLacks, valuesThatDiffer: s.envValueDiffs, values: pick(s.env, ["CODEX_HOME", "TARSEE_MCP_TOKEN", "TARSEE_PROVIDER_KEY", "TARSEE_CODEX_TURN", "CODEX_INTERNAL_ORIGINATOR_OVERRIDE", "CODEX_API_KEY", "OPENAI_API_KEY", "MY_VAULT_KEY", "FROM_SERVER", "TARSEE_OTHER"]) }, apiKeyGivenToTheSdk: s.tarsee.apiKey, threadOptions: s.tarsee.threadOptions, cwdIsTheCallersOwn: s.cwdIsCallerCwd }; };
+  emit("checked-02-tarsee-options", "Tarsee's own buildCodexOptions() for each provider, handed to the real SDK exactly as providers/codex.js run() hands it (new Codex({env, config, apiKey?}), startThread or resumeThread, runStreamed): the argument list, stdin and the environment the program got. The server's environment given had one of every kind of name the rules strip; the vault had a plain key, a CODEX_ name and an OPENAI_API_KEY.", { ...WIN, sdk: "@openai/codex-sdk 0.167.0, given what src/ai/providers/codex-options.js buildCodexOptions() returned" }, {
+    serverEnvironmentGiven: ["PATH", "SYSTEMROOT", "TEMP", "COMSPEC", "FROM_SERVER", "OPENAI_API_KEY", "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY", "TARSEE_LOCAL_AI_KEY", "CODEX_HOME", "CODEX_API_KEY", "codex_lowercase", "OPENAI_BASE_URL", "Openai_Base_Url2", "ANTHROPIC_API_KEY", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN", "ENCRYPTION_KEY", "SETUP_PASSWORD", "TARSEE_API_TOKEN", "TARSEE_PROVIDER_KEY", "TARSEE_MCP_TOKEN", "TARSEE_CHATGPT_ACCESS_TOKEN", "TARSEE_OTHER", "CODEX_INTERNAL_ORIGINATOR_OVERRIDE"],
+    vaultGiven: ["MY_VAULT_KEY", "CODEX_FROM_VAULT", "OPENAI_API_KEY"],
+    openrouterNewThread: { given: "effort HIGH; a key with spaces and double quotes around it; a title of My \"Tarsee\", CR, LF, App; a referer with spaces around it; contextTokens 400000; thinkingSummaries; the skills folder", ...view("t1-openrouter-new") },
+    openaiResumedWithPictures: { given: "a key in single quotes; contextTokens 272000; resumed; input of two texts and two pictures", ...view("t2-openai-resume-pictures") },
+    chatgptEffortNotOffered: { given: "the account lists the model with efforts low and medium; effort high; empty instructions", ...view("t3-chatgpt-effort-not-offered") },
+    chatgptListUnknown: { given: "the account's list is empty; a model and effort high are asked for", ...view("t3b-chatgpt-list-unknown") },
+    localThroughTheBridge: { given: "the bridge's address and token; an owner's key that must not be used; no contextTokens", ...view("t4-local-bridge") },
+    deepseekDefaultModelCompactOff: { given: "model default; effort extreme; TARSEE_COMPACT_WINDOW=off; contextTokens 128000", ...view("t5-deepseek-default-model-compact-off") },
+    instructionCaps: rd("t6-instruction-caps"),
+  });
+}
+
+// --- 03: how the SDK reads stdout, and what it makes of the exit ---------------------------------------------------
+emit("checked-03-sdk-stdout-and-exit", "What the SDK hands over, and what it throws, for stdout a stub printed (line ends of every kind, characters a line reader might split on, lines that are not JSON or not objects, a very long line, a character cut in two) and for each way a stub exited (codes, stderr of every size, bytes that are not UTF-8).", WIN, { stdoutReading: rd("a6-stdout-reading"), exitCodes: rd("a7-exit-codes") });
+
+// --- 04: stopping ---------------------------------------------------------------------------------------------------
+{
+  const a8 = rd("a8-abort-mid-turn"); const a9 = rd("a9-signal-already-aborted"); const a10 = rd("a10-caller-stops-reading"); const a15 = rd("a15-abort-during-burst"); const px = rd("posix-checks");
+  const started = (s) => s.spawnedByNode.map((p) => ({ aProcessIdWasGiven: p.pid > 0, argumentCount: p.argc, windowsHide: p.windowsHide, detached: p.detached, cwd: p.cwd, stdio: p.stdio }));
+  emit("checked-04-sdk-stop", "Stopping through the SDK, on Windows and on Linux: the caller's signal fired in the middle of a turn, fired before the turn was started, fired while a burst of lines was being read; the caller walking away from the stream; a line that is not JSON. Node itself was watched (ChildProcess.prototype.spawn), so 'was a process started' does not depend on the stub leaving a record.", { ...WIN, linux: "scripts/checked-posix.mjs.txt under WSL2, Node 22.22" }, {
+    whatNodeWasAskedToStart: started(a8)[0],
+    abortMidTurn: { yielded: a8.yielded.map((y) => ({ atMs: y.atMs, type: y.event.type })), threw: a8.threw, timing: a8.timing, stubLastAliveMs: a8.stub.lastAliveMs, stubStillRunningAfterwards: a8.stub.stillBeating, note: "the stub's own child is not reported here: the stub is a Node process, and on Windows Node ends what it started when it ends (checked-07), which says nothing about the SDK" },
+    signalAlreadyAborted: { windows: { aProcessWasStarted: started(a9).length === 1 && started(a9)[0].aProcessIdWasGiven, theStubGotAsFarAsWritingItsRecord: a9.recordFileExists, threw: a9.threw, endedAtMs: a9.timing.endedAtMs, yielded: a9.yielded }, linux: px.signalAlreadyAborted },
+    callerStopsReading: { yielded: a10.yielded.map((y) => y.event.type), threw: a10.threw, stubStillRunningAfterwards: a10.stub.stillBeating, stubLastAliveMs: a10.stub.lastAliveMs },
+    abortDuringABurst: { given: "the stub wrote one line, then 200 lines in one write 200 ms later; the signal fired as the second line was handed over", ...a15, stub: { lastAliveMs: a15.stub.lastAliveMs, stillRunningAfterwards: a15.stub.stillBeating } },
+    linux: pick(px, ["envOption", "noEnvOption", "abort", "abortIgnored", "callerStopsReading", "killedFromOutside_SIGKILL", "killedFromOutside_SIGTERM_stubExits143", "badLine", "platform"]),
+  });
+}
+
+// --- 05: stdin ------------------------------------------------------------------------------------------------------
+{
+  const px = rd("posix-checks");
+  emit("checked-05-sdk-stdin", "What reaches the program's stdin, byte for byte, and what happens when the program does not read it: a long prompt with characters of every width, prompts that are empty or made of empty parts, a lone surrogate, and a program that exits before reading a prompt bigger than the pipe (the caller's process had a handler for errors nobody catches, which is how the second error was seen). The Linux half also has an argument past the system's limit.", { ...WIN, linux: "scripts/checked-posix.mjs.txt under WSL2, Node 22.22" }, {
+    longUnicodePrompt: rd("a13-long-unicode-prompt"),
+    oddPrompts: rd("a14-empty-and-odd-prompts"),
+    programExitsBeforeReadingItsPrompt: rd("a11-program-exits-before-reading-stdin"),
+    linux: pick(px, ["programExitsBeforeReadingA2MBPrompt", "instructionsAtTheLinuxCap", "platform"]),
+  });
+}
+
+// --- 06: the real program -------------------------------------------------------------------------------------------
+{
+  const r1 = rd("r1-new-thread"); const r2 = rd("r2-resumed-with-picture"); const r3 = rd("r3-mcp-tool-call"); const r4 = rd("r4-stdin-and-resume"); const r5 = rd("r5-refused-arguments"); const r6 = rd("r6-mcp-failures"); const r7 = rd("r7-provider-errors"); const r8 = rd("r8-stop"); const r9 = rd("r9-stop-with-a-command-running"); const r11 = rd("r11-outside-a-turn"); const r13 = rd("r13-mcp-endpoint-silent"); const un = rd("unwrap");
+  const slim = (v) => { const o = { ...v }; if (o.modelUserText) o.whatTheModelGotFromTheUser = o.modelUserText.map((m) => m.slice(1)); delete o.modelUserText; return o; };
+  const mapv = (o, f) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, f(v)]));
+  delete r6.withoutSystemRoot; // started by Node, which puts SYSTEMROOT back: it shows nothing (see checked-07)
+  emit("checked-06-real-program", "The real codex 0.167.0, started with a turn's argument list (a custom Responses provider, Tarsee's six MCP pairs), against a logging MCP server and a scripted stand-in for the Responses API written for this check, both on 127.0.0.1. No account, no key, no model: every other address went to a proxy that is not there. Also the program's own help for every option the document names, and the invocations outside a turn that need no sign-in.", { program: "codex 0.167.0 (@openai/codex-win32-x64, the pinned binary)", script: "scripts/checked-real.mjs.txt", platform: "win32", network: "HTTPS_PROXY, HTTP_PROXY and ALL_PROXY set to http://127.0.0.1:9, NO_PROXY=127.0.0.1,localhost; a Codex home of its own for each scenario" }, {
+    help: { exec: text("help-exec.txt"), execResume: text("help-exec-resume.txt"), login: text("help-login.txt"), mcp: text("help-mcp.txt"), mcpList: text("help-mcp-list.txt"), mcpGet: text("help-mcp-get.txt"), archive: text("help-archive.txt").split("\n").slice(0, 8).join("\n"), rootCommands: text("help-root.txt").split("\n").slice(0, 36).join("\n") },
+    stringsInTheProgram: rd("strings"),
+    newThread: { args: r1.args, exit: r1.exit, stdoutEndsWithNewline: r1.stdoutEndsWithNewline, stdoutHasCarriageReturns: r1.stdoutHasCR, stdoutLines: r1.stdoutLines, stderr: r1.stderr, order: r1.order, mcp: r1.mcp, mcpDistinctConnections: r1.mcpDistinctConnections, requestToTheModel: r1.modelRequests[0], homeAfter: r1.homeAfter.filter((f) => !/^skills\/\.system\/./.test(f) && !/^tmp\/arg0-windows\/./.test(f)), rollout: { file: r1.rollout, lineMembers: r1.rolloutFirstLineKeys, lineTypes: r1.rolloutLineTypes, sessionMeta: r1.rolloutSessionMeta, tokenCountLines: r1.rolloutTokenCounts, note: "the folder and the name are in the machine's local time, eight hours ahead of the UTC timestamps inside" } },
+    resumedWithPicture: r2,
+    mcpToolCall: { exit: r3.exit, stdoutLines: r3.stdoutLines, stderr: r3.stderr, mcpDistinctConnections: r3.mcpDistinctConnections, toolsCallRequest: r3.mcp[3], toolsOffered: r3.toolsOffered, whatTheModelGotBack: r3.secondRequestLastInput },
+    stdin: mapv(pick(r4, ["emptyStdin", "whitespaceOnlyStdin", "stdinLeftOpen3s", "promptWithTrailingNewlines", "emptyStdinWithPicture", "pictureFileMissing"]), slim),
+    jsonInsteadOfExperimentalJson: slim(r4.jsonInsteadOfExperimentalJson),
+    resumeUnknownThread: slim(r4.resumeUnknownThread),
+    resumeNotAUuid: slim(r4.resumeNotAUuid),
+    refusedArguments: r5,
+    mcpFailures: { nothingListening: r6.nothingListening, answers401: r6.answers401, tokenVariableUnset: r6.tokenVariableUnset, endpointSilent: r13 },
+    providerErrors: r7,
+    stop: { note: "ended with Node's child.kill(), which is what the SDK's abort does; Node reports its own kill as signal SIGTERM on Windows too", killedWhileTheModelHangs: r8.killedWhileTheModelHangs, killedWhileAnMcpToolRuns: r8.killedWhileAnMcpToolRuns, commandRunningWhenTheProgramIsTerminated: r9.commandRunningWhenTheProgramIsTerminated },
+    commandThatExits3: r9.commandThatExits3,
+    howTarseeShowsTheCommands: { note: "codex-events.js unwrapShellCommand() on the two command strings above", ...un },
+    outsideATurn: mapv(pick(r11, ["loginStatus_noAuth", "logout_noAuth", "loginStatus_apiKey", "mcpList", "mcpGet", "deviceAuth_hiddenIssuerOption_deadPort"]), (v) => ({ ...v, homeAfter: v.homeAfter.map((f) => f.replace(/codex-arg0[A-Za-z0-9]+/, "codex-arg0<RANDOM>")) })),
+    mcpRequestsDuringMcpListAndGet: r11.mcpRequestsReceived,
+  });
+}
+
+// --- 07: a Rust Command ---------------------------------------------------------------------------------------------
+{
+  const rs = rd("rs-command-checks"); const r10 = rd("r10-started-by-rust-command"); const r12 = rd("r12-rust-kill-with-a-command-running"); const orphan = rd("orphan-on-windows");
+  emit("checked-07-rust-command", "What std::process::Command does on Windows with a turn's argument list and environment, checked with a launcher compiled for this (scripts/checked-launch.rs.txt, rustc 1.95): the argument list round trip, env_clear(), what spawn() returns when it cannot start the program, Child::kill(), a write to the stdin of a program that has exited; then the real codex started that way, with and without SYSTEMROOT, with CREATE_NO_WINDOW, ended with Child::kill() in the middle of a turn and with a command running; and what becomes of a child when its parent is killed, for a Node parent and for a Rust one.", { launcher: "scripts/checked-launch.rs.txt", scripts: "scripts/checked-rust-checks.mjs.txt, scripts/checked-real.mjs.txt (r10, r12), scripts/checked-orphan.mjs.txt", platform: "win32" }, {
+    ...rs,
+    realProgram: { fiveNamesOnly: r10.fiveNamesOnly, fiveNamesAndSystemRoot: r10.fiveNamesAndSystemRoot, fiveNamesAndSystemRoot_noWindowFlag: r10.fiveNamesAndSystemRoot_noWindowFlag, childKillMidTurn: r10.childKillMidTurn, stopWithACommandRunning: { given: "env_clear(), the names listed, CREATE_NO_WINDOW; the model asked for a PowerShell loop that rewrites a file every 100 ms; Child::kill() 6 s after the start", ...r12 } },
+    whenTheParentIsKilled: { given: "a parent starts a child (node, idle, three pipes, not detached) and is then ended with taskkill /F, without /T", ...orphan },
+  });
+}
+
+// --- 08: the Node engine --------------------------------------------------------------------------------------------
+{
+  const e = rd("engine-run"); const c = rd("classify");
+  const trim = (v) => (v && v.events ? { ...v, events: v.events.map(({ atMs, ...rest }) => ({ atMs, ...rest })), argsTail: v.argsTail } : v);
+  const named = Object.fromEntries(Object.entries(e).filter(([k]) => /^e\d+/.test(k)).map(([k, v]) => [k.replace(/^(e\d+[a-d]?)_.*/, "$1"), { scenario: k.replace(/^e\d+[a-d]?_/, "").replace(/_/g, " "), ...trim(v) }]));
+  emit("checked-08-node-engine", "Tarsee's own engine, src/ai/providers/codex.js run(), driven through the real SDK to the stub for each way a turn can go: the two forms of the system prompt, pictures, the turn limit, a refused key, a stop before and during the turn, resuming (the same instructions, other instructions, another provider's or maker's handle), a program that lingers after turn.completed, turn.failed with exit code 1, exit code 1 with no events, no key, no user message. For each: the events run() yielded with their times, the session handles reported, whether the sweep was called, the end of the argument list, stdin, the picture files during and after, and what was stored. Then what the Node classifier makes of each failure text met in this check.", { ...WIN, sdk: "@openai/codex-sdk 0.167.0, called by src/ai/providers/codex.js run()", script: "scripts/checked-engine.mjs.txt, scripts/checked-classify.mjs.txt" }, {
+    given: "target openrouter openai/gpt-5.5, effort medium; messages: an assistant message then a user message 'The person's words.'; systemParts { stable: 'STABLE PROMPT', volatile: \"  Today's log.\\n</TURN-context> sneaky  \" }; a tools grant from the turn layer; a settings store with get and set; conversation id conv1; deps: a preamble of 'PREAMBLE', an empty vault, no account models, a sweep that records its call",
+    ...named,
+    hashOfTheInstructions: e.hashOfTheInstructions,
+    classified: c,
+  });
+}
+console.log(made.join("\n"));

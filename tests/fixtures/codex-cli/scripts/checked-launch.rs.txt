@@ -1,0 +1,56 @@
+// A launcher for the independent check: starts a program the way a Rust engine would (std::process::Command),
+// from a spec folder, so that nothing of Node's own process start is in the way.
+//   launch <spec-dir>        program.txt, args.bin (NUL-separated), env.bin (NUL-separated NAME=VALUE; with env_clear),
+//                            stdin.bin, opts.txt (kill_after_ms=N, no_window=1, env_clear=1, keep_stdin_open_ms=N)
+//   launch --dump <file>     write this process's own arguments and environment to <file> and exit 7
+use std::io::{Read, Write};
+use std::process::{Command, Stdio};
+use std::{env, fs, thread, time::{Duration, Instant}};
+
+fn main() {
+    let a: Vec<String> = env::args().collect();
+    if a.len() >= 3 && a[1] == "--dump" {
+        let mut out: Vec<u8> = Vec::new();
+        for arg in env::args_os().skip(3) { out.extend_from_slice(arg.to_string_lossy().as_bytes()); out.push(0); }
+        fs::write(format!("{}.args", &a[2]), &out).unwrap();
+        let mut e: Vec<u8> = Vec::new();
+        for (k, v) in env::vars_os() { e.extend_from_slice(format!("{}={}", k.to_string_lossy(), v.to_string_lossy()).as_bytes()); e.push(0); }
+        fs::write(format!("{}.env", &a[2]), &e).unwrap();
+        std::process::exit(7);
+    }
+    let dir = std::path::PathBuf::from(&a[1]);
+    let read = |n: &str| fs::read(dir.join(n)).ok();
+    let program = String::from_utf8(read("program.txt").unwrap()).unwrap().trim().to_string();
+    let split = |b: Vec<u8>| -> Vec<String> { b.split(|c| *c == 0).filter(|s| !s.is_empty()).map(|s| String::from_utf8(s.to_vec()).unwrap()).collect() };
+    let args = read("args.bin").map(split).unwrap_or_default();
+    let opts = read("opts.txt").map(|b| String::from_utf8(b).unwrap()).unwrap_or_default();
+    let opt = |k: &str| -> Option<u64> { opts.lines().find_map(|l| l.strip_prefix(&format!("{}=", k)).and_then(|v| v.trim().parse().ok())) };
+    let mut cmd = Command::new(&program);
+    cmd.args(&args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    if opt("env_clear") == Some(1) { cmd.env_clear(); }
+    if let Some(envb) = read("env.bin") { for kv in split(envb) { if let Some((k, v)) = kv.split_once('=') { cmd.env(k, v); } } }
+    #[cfg(windows)]
+    { use std::os::windows::process::CommandExt; if opt("no_window") == Some(1) { cmd.creation_flags(0x0800_0000); } }
+    let t0 = Instant::now();
+    let mut result = String::new();
+    match cmd.spawn() {
+        Err(e) => { result.push_str(&format!("spawn_error_kind={:?}\nspawn_error_os={:?}\nspawn_error_text={}\n", e.kind(), e.raw_os_error(), e)); }
+        Ok(mut child) => {
+            result.push_str(&format!("pid={}\n", child.id()));
+            let mut stdin = child.stdin.take().unwrap();
+            let input = read("stdin.bin").unwrap_or_default();
+            let keep = opt("keep_stdin_open_ms");
+            let w = thread::spawn(move || { let r = stdin.write_all(&input); if let Some(ms) = keep { thread::sleep(Duration::from_millis(ms)); } drop(stdin); r.map_err(|e| format!("{:?} os={:?} {}", e.kind(), e.raw_os_error(), e)) });
+            let mut so = child.stdout.take().unwrap(); let mut se = child.stderr.take().unwrap();
+            let o = thread::spawn(move || { let mut b = Vec::new(); so.read_to_end(&mut b).ok(); b });
+            let e = thread::spawn(move || { let mut b = Vec::new(); se.read_to_end(&mut b).ok(); b });
+            if let Some(ms) = opt("kill_after_ms") { thread::sleep(Duration::from_millis(ms)); let k = child.kill(); result.push_str(&format!("kill_result={:?}\nkilled_at_ms={}\n", k, t0.elapsed().as_millis())); }
+            let status = child.wait();
+            result.push_str(&format!("wait={:?}\nexit_code={:?}\nwaited_ms={}\n", status, status.as_ref().ok().and_then(|s| s.code()), t0.elapsed().as_millis()));
+            result.push_str(&format!("stdin_write={:?}\n", w.join().unwrap()));
+            fs::write(dir.join("stdout.bin"), o.join().unwrap()).unwrap();
+            fs::write(dir.join("stderr.bin"), e.join().unwrap()).unwrap();
+        }
+    }
+    fs::write(dir.join("result.txt"), result).unwrap();
+}

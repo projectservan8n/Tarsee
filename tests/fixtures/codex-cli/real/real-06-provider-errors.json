@@ -1,0 +1,76 @@
+{
+  "name": "real-06-provider-errors",
+  "what": "The model's server refusing the request: an unknown model (404 and 400) and a refused key (401). Codex retries a 401 five times (`Reconnecting... n/5`) before failing; Tarsee's engine stops the turn at the first one for key providers.",
+  "made_with": {
+    "program": "codex 0.167.0 (the real pinned program), started with the argument list, environment and stdin the SDK produced",
+    "platform": "win32"
+  },
+  "unknownModel404": {
+    "modelAnswered": {
+      "status": 404,
+      "error": {
+        "message": "The model `no-such-model` does not exist or you do not have access to it.",
+        "type": "invalid_request_error",
+        "code": "model_not_found"
+      }
+    },
+    "exitCode": 1,
+    "ms": 454,
+    "stdoutLines": [
+      "{\"type\":\"thread.started\",\"thread_id\":\"<THREAD_ID>\"}",
+      "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Model metadata for `no-such-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.\"}}",
+      "{\"type\":\"turn.started\"}",
+      "{\"type\":\"error\",\"message\":\"The model `no-such-model` does not exist or you do not have access to it.\"}",
+      "{\"type\":\"turn.failed\",\"error\":{\"message\":\"The model `no-such-model` does not exist or you do not have access to it.\"}}"
+    ],
+    "stderr": "Reading prompt from stdin...\n",
+    "whatTheSdkThrows": "Codex Exec exited with code 1: Reading prompt from stdin...\n",
+    "requestsToTheModel": 1
+  },
+  "unknownModel400": {
+    "modelAnswered": {
+      "status": 400,
+      "error": {
+        "message": "The requested model 'no-such-model' does not exist.",
+        "type": "invalid_request_error",
+        "param": "model",
+        "code": "model_not_found"
+      }
+    },
+    "exitCode": 1,
+    "ms": 465,
+    "stdoutLines": [
+      "{\"type\":\"thread.started\",\"thread_id\":\"<THREAD_ID>\"}",
+      "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Model metadata for `no-such-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.\"}}",
+      "{\"type\":\"turn.started\"}",
+      "{\"type\":\"error\",\"message\":\"The requested model 'no-such-model' does not exist.\"}",
+      "{\"type\":\"turn.failed\",\"error\":{\"message\":\"The requested model 'no-such-model' does not exist.\"}}"
+    ],
+    "stderr": "Reading prompt from stdin...\n",
+    "whatTheSdkThrows": "Codex Exec exited with code 1: Reading prompt from stdin...\n",
+    "requestsToTheModel": 1
+  },
+  "key401": {
+    "modelAnswered": {
+      "status": 401,
+      "error": {
+        "message": "Incorrect API key provided: sk-test***",
+        "type": "invalid_request_error",
+        "code": "invalid_api_key"
+      }
+    },
+    "exitCode": 1,
+    "ms": 698,
+    "stdoutLines": [
+      "{\"type\":\"thread.started\",\"thread_id\":\"<THREAD_ID>\"}",
+      "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Model metadata for `no-such-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.\"}}",
+      "{\"type\":\"turn.started\"}",
+      "{\"type\":\"error\",\"message\":\"Reconnecting... 1/1 (unexpected status 401 Unauthorized: Incorrect API key provided: sk-test***, url: http://127.0.0.1:<MODEL_PORT>/v1/responses)\"}",
+      "{\"type\":\"error\",\"message\":\"unexpected status 401 Unauthorized: Incorrect API key provided: sk-test***, url: http://127.0.0.1:<MODEL_PORT>/v1/responses\"}",
+      "{\"type\":\"turn.failed\",\"error\":{\"message\":\"unexpected status 401 Unauthorized: Incorrect API key provided: sk-test***, url: http://127.0.0.1:<MODEL_PORT>/v1/responses\"}}"
+    ],
+    "stderr": "Reading prompt from stdin...\n",
+    "whatTheSdkThrows": "Codex Exec exited with code 1: Reading prompt from stdin...\n",
+    "requestsToTheModel": 2
+  }
+}

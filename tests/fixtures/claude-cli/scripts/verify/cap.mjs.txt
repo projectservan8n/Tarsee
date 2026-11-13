@@ -1,0 +1,182 @@
+// Independent capture: Tarsee's own run() -> the real SDK 0.3.319 -> a stub in place of `claude`.
+// Written from scratch for the verification pass; it shares nothing with tests/fixtures/claude-cli/scripts.
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+const SCRATCH = process.env.VERIFY_SCRATCH;
+const NODE_PROJECT = process.env.TARSEE_NODE_PROJECT;
+const STATE = path.join(SCRATCH, "state");
+const HOME = path.join(SCRATCH, "home");
+const WS = path.join(SCRATCH, "ws");
+const OUT = path.join(SCRATCH, "out");
+for (const d of [STATE, HOME, WS, OUT]) fs.mkdirSync(d, { recursive: true });
+
+// Tarsee's config module creates its state folder on import: keep that inside the scratch folder.
+process.env.TARSEE_STATE_DIR = STATE;
+process.env.TARSEE_API_TOKEN = "made-up-api-token";
+process.env.CLAUDE_DEFAULT_MODEL = "sonnet";
+delete process.env.ANTHROPIC_API_KEY;
+
+const imp = (rel) => import(pathToFileURL(path.join(NODE_PROJECT, rel)).href);
+const { run, buildQueryOptions } = await imp("src/ai/providers/claude-code.js");
+const sdk = await imp("node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs");
+const STUB = path.join(SCRATCH, "stub", "fake-claude.exe").replace(/\//g, "\\");
+
+const only = process.argv.slice(2);
+
+function serverEnv(extra = {}) {
+  // A made-up "server environment": the system names a process needs, plus canaries the rules must strip or keep.
+  const keep = {};
+  for (const k of ["PATH", "PATHEXT", "SystemRoot", "SystemDrive", "COMSPEC", "TEMP", "TMP", "windir"]) if (process.env[k]) keep[k] = process.env[k];
+  return {
+    ...keep,
+    HOME, USERPROFILE: HOME,
+    NODE_OPTIONS: "--max-old-space-size=2048",
+    DEBUG: "canary",
+    ANTHROPIC_API_KEY: "made-up-key-that-must-be-stripped",
+    ANTHROPIC_BASE_URL: "http://should-be-stripped.invalid",
+    CLAUDE_CODE_OAUTH_TOKEN: "<PLAN_OAUTH_TOKEN>",
+    CLAUDE_CONFIG_DIR: "X:/should-be-stripped",
+    OPENAI_API_KEY: "made-up-openai",
+    DEEPSEEK_API_KEY: "made-up-railway-deepseek",
+    TARSEE_MCP_TOKEN: "made-up-mcp-token",
+    ENCRYPTION_KEY: "made-up-encryption",
+    VERIFY_PLAIN: "kept",
+    ...extra,
+  };
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+
+async function capture(name, { scenario = "turn", runOpts = {}, depsExtra = {}, envExtra = {}, abortAtMs = null, preAbort = false, exe = STUB, queryExtra = null, timeoutMs = 30000 }) {
+  if (only.length && !only.some((o) => name.startsWith(o))) return;
+  const stubOut = path.join(OUT, `${name}.stub.jsonl`);
+  fs.rmSync(stubOut, { force: true });
+  const env = serverEnv({ VSTUB_OUT: stubOut, VSTUB_SCENARIO: scenario, ...envExtra });
+  const t0 = Date.now();
+  const rel = () => Date.now() - t0;
+  const calls = [];
+  const ac = new AbortController();
+  if (preAbort) ac.abort();
+  let sdkError = null;
+  const seen = [];
+  const query = ({ prompt, options }) => {
+    const o = { ...options, pathToClaudeCodeExecutable: exe, ...(queryExtra ? queryExtra(options) : {}) };
+    // watch the process the SDK started (its pid comes from the SDK's own onProcessSpawned callback)
+    o.onProcessSpawned = (pid) => {
+      calls.push({ t: rel(), ev: "process started, pid known" });
+      const iv = setInterval(() => { try { process.kill(pid, 0); } catch { calls.push({ t: rel(), ev: "process gone (polled every 10 ms)" }); clearInterval(iv); } }, 10);
+      iv.unref?.();
+    };
+    calls.push({ t: rel(), promptKind: typeof prompt === "string" ? "string" : "async generator", prompt: typeof prompt === "string" ? prompt : null, options: describe(o) });
+    const q = sdk.query({ prompt, options: o });
+    // pass the messages through, noting each and any error the stream ends with
+    return (async function* () {
+      try { for await (const m of q) { seen.push({ t: rel(), type: m.type, subtype: m.subtype ?? m.event?.type }); yield m; } }
+      catch (e) { sdkError = { t: rel(), name: e?.name, message: e?.message }; throw e; }
+      finally { calls.push({ t: rel(), ev: "sdk stream finished" }); }
+    })();
+  };
+  const events = [];
+  const logs = [];
+  const orig = { log: console.log, warn: console.warn, error: console.error };
+  for (const k of Object.keys(orig)) console[k] = (...a) => logs.push({ t: rel(), level: k, text: a.map((x) => (x instanceof Error ? `${x.name}: ${x.message}` : typeof x === "string" ? x : JSON.stringify(x))).join(" ") });
+  let abortAt = null;
+  const timer = abortAtMs != null ? setTimeout(() => { abortAt = rel(); ac.abort(); }, abortAtMs) : null;
+  const guard = setTimeout(() => { events.push({ t: rel(), type: "HARNESS-TIMEOUT" }); ac.abort(); }, timeoutMs);
+  let handles = [];
+  try {
+    for await (const e of run({
+      target: { providerId: "claude" }, messages: [{ role: "user", content: "say hi" }], systemPrompt: "SYSTEM PROMPT TEXT",
+      signal: ac.signal, cwd: WS, onSessionHandle: (id) => handles.push({ t: rel(), id }),
+      ...runOpts,
+      deps: { query, env, stateDir: STATE, homeDir: HOME, vaultEnv: { MY_VAULT_KEY: "vault-value" }, mcpServer: null, store: null, isTranscriptOverCap: () => false, ...depsExtra },
+    })) events.push({ t: rel(), ...e });
+  } catch (e) { events.push({ t: rel(), type: "RUN-THREW", message: e?.message }); }
+  finally { clearTimeout(timer); clearTimeout(guard); for (const k of Object.keys(orig)) console[k] = orig[k]; }
+  const endedAt = rel();
+  await sleep(scenario === "bad-key-source" ? 6500 : scenario.startsWith("hang") ? 6000 : 150);
+  const stub = fs.existsSync(stubOut) ? fs.readFileSync(stubOut, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
+  const start = stub.find((r) => r.ev === "start");
+  const rec = {
+    name, scenario, abortAt, endedAt,
+    query_calls: calls,
+    argv: start?.argv ?? null, cwd: start?.cwd ?? null,
+    env_received: start?.env ?? null,
+    stdin: stub.filter((r) => r.ev === "stdin").map((r) => ({ t: r.t, bytes: r.bytes, raw: r.raw, json: r.json })),
+    stub_timeline: stub.filter((r) => r.ev !== "start" && r.ev !== "stdin").map((r) => ({ t: r.t, ev: r.ev, type: r.type, subtype: r.subtype, code: r.code, why: r.why })),
+    sdk_messages_seen: seen, sdk_error: sdkError,
+    tarsee_events: events, tarsee_logs: logs, session_handles: handles,
+  };
+  fs.writeFileSync(path.join(OUT, `${name}.json`), JSON.stringify(rec, null, 1));
+  orig.log(`${name}: argv ${rec.argv ? rec.argv.length : "none"}, stdin ${rec.stdin.length}, events ${events.map((e) => e.type + (e.stopReason ? ":" + e.stopReason : "")).join(",").slice(0, 200)}`);
+  return rec;
+}
+
+function describe(o) {
+  const out = {};
+  for (const [k, v] of Object.entries(o)) {
+    if (k === "env") out.env = v;
+    else if (k === "abortController") out[k] = `<AbortController aborted=${v.signal.aborted}>`;
+    else if (typeof v === "function") out[k] = "<function>";
+    else if (k === "mcpServers") out[k] = Object.fromEntries(Object.entries(v).map(([n, s]) => [n, s?.instance ? { type: s.type, name: s.name, instance: "<McpServer>" } : s]));
+    else out[k] = v;
+  }
+  return out;
+}
+
+// ---- the combinations -------------------------------------------------------------------------------------------
+const SESSION = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+
+await capture("a-plan-plain", {});
+await capture("b-plan-resume-parts-effort-thinking", {
+  runOpts: { target: { providerId: "claude", model: "opus", effort: "high" }, systemPrompt: undefined, systemParts: { stable: "STABLE PART", volatile: "VOLATILE PART" }, sessionId: SESSION, thinkingSummaries: true },
+});
+await capture("c-plan-media-image-no-mcp", {
+  scenario: "turn-slow",
+  runOpts: { messages: [{ role: "user", content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: PNG } }, { type: "text", text: "what is this? h\u00e9llo \u4f60\u597d \ud83d\ude42" }] }] },
+});
+await capture("d-plan-media-pdf-adapted-real-mcp", {
+  scenario: "turn-slow",
+  runOpts: { media: { media: [{ type: "document", source: { type: "base64", media_type: "application/pdf", data: "JVBERi0xLjQK" } }], text: "summarise" } },
+  depsExtra: { mcpServer: undefined },
+});
+await capture("e-plan-real-mcp-tool-call", { scenario: "mcp-call", depsExtra: { mcpServer: undefined } });
+await capture("f-anthropic-budget-maxturns", {
+  runOpts: { target: { providerId: "anthropic", model: "opus" }, maxBudgetUsd: 0.5, maxTurns: 8 },
+  depsExtra: { key: "<ANTHROPIC_KEY>" },
+});
+await capture("g-deepseek-default", { runOpts: { target: { providerId: "deepseek", effort: "medium" }, maxBudgetUsd: 1 }, depsExtra: { key: "<DEEPSEEK_KEY>" } });
+await capture("h-deepseek-pro-max-resume", { runOpts: { target: { providerId: "deepseek", model: "deepseek-v4-pro", effort: "max" }, sessionId: SESSION }, depsExtra: { key: "<DEEPSEEK_KEY>" } });
+await capture("i-openrouter-title-referer", {
+  runOpts: { target: { providerId: "openrouter", model: "anthropic/claude-sonnet-5" } },
+  depsExtra: { key: "<OPENROUTER_KEY>", store: { get: (k) => (k === "ai.openrouter.appTitle" ? "My Title" : k === "ai.openrouter.referer" ? "https://example.invalid/app" : null) } },
+});
+await capture("j-http-mcp-through-sdk", {
+  runOpts: { target: { providerId: "deepseek" } },
+  depsExtra: { key: "<DEEPSEEK_KEY>" },
+  queryExtra: () => ({ mcpServers: { tarsee: { type: "http", url: "http://127.0.0.1:45678/mcp", headers: { Authorization: "Bearer ${TARSEE_MCP_TOKEN}" }, alwaysLoad: true } } }),
+});
+await capture("k-stop-hang", { scenario: "hang", abortAtMs: 600 });
+await capture("l-stop-hang-then-more", { scenario: "hang-then-more", abortAtMs: 600 });
+await capture("m-stop-exits-on-stdin-close", { scenario: "exit-on-stdin-close", abortAtMs: 600 });
+await capture("n-signal-aborted-before-start", { preAbort: true });
+await capture("o-exit1-at-once", { scenario: "exit1-at-once" });
+await capture("p-exit0-at-once", { scenario: "exit0-at-once" });
+await capture("q-exit0-after-init-answer", { scenario: "exit0-after-init-answer" });
+await capture("r-exit0-mid-answer", { scenario: "exit0-mid-answer" });
+await capture("s-program-not-found", { exe: path.join(SCRATCH, "stub", "no-such-program.exe").replace(/\//g, "\\") });
+await capture("t-error-result-then-exit1", { scenario: "error-result" });
+await capture("u-api-error-result", { scenario: "api-error-result" });
+await capture("v-budget-forms", { runOpts: { target: { providerId: "anthropic", model: "sonnet" }, maxBudgetUsd: 0.0000001, maxTurns: 0 }, depsExtra: { key: "<ANTHROPIC_KEY>" } });
+await capture("w-unknown-control-requests", { scenario: "unknown-control" });
+await capture("x-non-json-lines", { scenario: "non-json-lines" });
+await capture("y-bad-key-source", { scenario: "bad-key-source" });
+await capture("z-empty-prompt-stable-only", { runOpts: { messages: [{ role: "user", content: "" }], systemPrompt: undefined, systemParts: { stable: "ONLY STABLE", volatile: "" }, sessionId: null, sessionHandle: SESSION } });
+await capture("za-exit3-no-stderr", { scenario: "exit3-no-stderr" });
+await capture("zb-no-init-answer", { scenario: "no-init-answer" });
+await capture("zc-working-folder-missing", { runOpts: { cwd: path.join(SCRATCH, "no-such-folder", "ws") } });
+await capture("zd-crlf-lines", { envExtra: { VSTUB_EOL: "crlf" } });
+process.exit(0);

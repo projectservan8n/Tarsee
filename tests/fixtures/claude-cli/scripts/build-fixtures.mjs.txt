@@ -1,0 +1,262 @@
+// Puts the captures together as the fixture folder: node build-fixtures.mjs <out folder>
+//   sdk/        what the Agent SDK did for each combination of options (made by cap-fixtures.mjs, copied as they are)
+//   wire/       every line between the SDK and the real claude program (made by tee-capture.mjs)
+//   real/       the real claude program driven directly, with no SDK (made by real-*.mjs)
+//   mcp-http/   what the real program sent to an HTTP MCP server
+//   scripts/    the capture scripts, as .txt so the repository's tools leave them alone
+// Machine paths, ports and the fake keys are replaced with placeholders; long lists nobody reads are cut to a count.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+const SCRATCH = String(process.env.CAPTURE_SCRATCH || "").split("\\").join("/").replace(/[/]+$/, "");
+const NODE_PROJECT = String(process.env.TARSEE_NODE_PROJECT || "").split("\\").join("/").replace(/[/]+$/, "");
+const OUT = process.argv[2];
+if (!SCRATCH || !NODE_PROJECT || !OUT) throw new Error("usage: CAPTURE_SCRATCH=... TARSEE_NODE_PROJECT=... node build-fixtures.mjs <out folder>");
+
+const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const pathRe = (p) => new RegExp(esc(p).replace(/\\\\|\//g, "[\\\\/]+"), "gi");
+const slug = (p) => p.replace(/[^a-zA-Z0-9]/g, "-");
+const names = (dir) => { try { return fs.readdirSync(`${SCRATCH}/${dir}`).sort((a, b) => b.length - a.length); } catch { return []; } };
+
+const pairs = [];
+for (const n of names("ws")) { pairs.push([pathRe(`${SCRATCH}/ws/${n}`), "<WORKSPACE>"]); pairs.push([new RegExp(esc(slug(path.win32.normalize(`${SCRATCH}/ws/${n}`))), "g"), "<WORKSPACE_AS_FOLDER_NAME>"]); }
+for (const n of names("homes")) pairs.push([pathRe(`${SCRATCH}/homes/${n}`), "<HOME>"]);
+// the wire captures' workspaces, as the program names their transcript folders
+for (const n of names("cap")) pairs.push([new RegExp(esc(slug(path.win32.normalize(`${SCRATCH}/cap/${n}/workspace`))), "g"), "<WORKSPACE_AS_FOLDER_NAME>"]);
+// this machine's temp folder and home (the program keeps a pasted picture under the temp folder and names the path)
+pairs.push([pathRe(os.tmpdir()), "<TEMP>"], [pathRe(os.homedir()), "<USER_HOME>"]);
+if (process.env.SystemRoot) pairs.push([pathRe(`${process.env.SystemRoot}/System32/WindowsPowerShell/v1.0/powershell.exe`), "<POWERSHELL_EXE>"]);
+pairs.push(
+  [new RegExp(esc(os.version()) + " [0-9.]+", "g"), "<OS_VERSION>"],
+  [pathRe(`${NODE_PROJECT}/node_modules/@anthropic-ai/claude-agent-sdk-win32-x64/claude.exe`), "<CLAUDE_EXE>"],
+  [pathRe(NODE_PROJECT), "<TARSEE_ROOT>"],
+  [pathRe(`${SCRATCH}/tarsee-state`), "<STATE_DIR>"],
+  [pathRe(SCRATCH), "<SCRATCH>"],
+  [/127\.0\.0\.1:\d{2,5}/g, "127.0.0.1:<PORT>"],
+  [new RegExp(esc("sk-" + "test-not-a-key-000000000000000000"), "g"), "<TOKEN>"],
+  [new RegExp(esc("sk-ant-" + "api03-test-not-a-key-AAAAAAAAAAAA"), "g"), "<ANTHROPIC_KEY>"],
+  [new RegExp(esc("sk-ant-" + "oat01-test-not-a-token-000000"), "g"), "<PLAN_OAUTH_TOKEN>"],
+  [new RegExp(esc("tarsee-mcp-" + "test-token-0123456789abcdef"), "g"), "<TOKEN>"],
+);
+const str = (s) => pairs.reduce((acc, [re, to]) => acc.replace(re, to), s);
+const isObj = (v) => v && typeof v === "object";
+const clean = (v) => {
+  if (typeof v === "string") return str(v);
+  if (Array.isArray(v)) return v.map(clean);
+  if (isObj(v)) return Object.fromEntries(Object.entries(v).map(([k, x]) => [str(k), clean(x)]));
+  return v;
+};
+const count = (arr, what) => (Array.isArray(arr) ? `<${arr.length} ${what}; cut from this fixture>` : arr);
+
+/** Cut the long lists of one stdout message (the program's catalog of commands, models, skills) to a count. */
+function trim(m, { keepLists = false } = {}) {
+  if (!isObj(m) || keepLists) return m;
+  if (m.type === "control_response" && isObj(m.response?.response) && Array.isArray(m.response.response.commands)) {
+    const r = m.response.response;
+    return { ...m, response: { ...m.response, response: { ...r, commands: count(r.commands, "commands"), models: count(r.models, "models"), agents: count(r.agents, "agents") } } };
+  }
+  if (m.type === "system" && m.subtype === "init") {
+    return { ...m, slash_commands: count(m.slash_commands, "slash commands"), terminal_slash_commands: count(m.terminal_slash_commands, "terminal slash commands"), skills: count(m.skills, "skills") };
+  }
+  if (m.type === "control_request" && m.request?.subtype === "initialize" && m.request.sdkMcpServerManifests) {
+    const man = Object.fromEntries(Object.entries(m.request.sdkMcpServerManifests).map(([k, v]) => [k, { ...v, toolsListResult: v.toolsListResult ? { tools: `<${v.toolsListResult.tools.length} tools, each {name, description, inputSchema}; the whole list is in sdk/08-plan-with-mcp-tool-call.json>` } : undefined }]));
+    return { ...m, request: { ...m.request, sdkMcpServerManifests: man } };
+  }
+  return m;
+}
+const write = (rel, obj) => {
+  const file = path.join(OUT, rel);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, (typeof obj === "string" ? obj : JSON.stringify(obj, null, 2)) + (typeof obj === "string" && obj.endsWith("\n") ? "" : "\n"));
+};
+const read = (rel) => JSON.parse(fs.readFileSync(`${SCRATCH}/${rel}`, "utf8"));
+
+// only the folders this script writes: a README beside them stays
+for (const sub of ["sdk", "wire", "real", "mcp-http", "scripts"]) fs.rmSync(path.join(OUT, sub), { recursive: true, force: true });
+
+// --- sdk/ ---
+for (const f of fs.readdirSync(`${SCRATCH}/fixtures`).filter((x) => x.endsWith(".json")).sort()) {
+  const obj = read(`fixtures/${f}`);
+  // the stub's own catalog reply is short; nothing to cut. Keep the 27-tool manifest whole in 08 only.
+  if (Array.isArray(obj.stdin) && !f.startsWith("08-")) obj.stdin = obj.stdin.map((s) => (s.json ? { ...s, json: trim(s.json) } : s));
+  write(`sdk/${f}`, obj);
+}
+
+// --- real/ ---
+const REAL = [
+  ["01-basic", "turn-plain-text", "A plain turn: the initialize request, one user message, a streamed text answer, result/success, then stdin closed by the driver; exit code 0. CLAUDE_CODE_SDK_READS_SESSION_STATE is NOT set here, so there are no session_state_changed messages. The catalog lists are whole in this one file.", { keepLists: true }],
+  ["04-session-turn1-tool", "turn-bash-tool-call", "A new session in which the model calls Bash: the assistant message with the tool_use block, the user message with the tool_result, the final text, result/success."],
+  ["04-session-turn2-resume", "turn-resumed-session", "The next turn of that session, started with --resume=<session id>: system/init carries the same session_id; total_cost_usd and modelUsage in the result continue from the first turn's totals, usage and model_usage_since_last_result are this turn's."],
+  ["04-thinking", "turn-thinking-and-effort", "--thinking=adaptive --thinking-display=summarized --effort=high against a fake that streams a thinking block: content_block_start{thinking}, thinking_delta, signature_delta, one assistant message per finished block, and system/thinking_tokens messages."],
+  ["10-usage-cost", "turn-usage-cost", "A provider that puts its own cost on message_delta.usage (OpenRouter's usage.cost) and cache counts on message_start.usage: both come through on the stream_event unchanged; the result's total_cost_usd is the program's own figure."],
+  ["03-api-retry", "turn-api-retry", "The API answers 529 once and then succeeds (CLAUDE_CODE_MAX_RETRIES=2): the system/api_retry message."],
+  ["02A-stdin-closed-mid-stream", "stop-stdin-closed-mid-stream", "stdin is closed in the middle of a streamed answer (what the SDK does first when the caller aborts): the program writes nothing more and does NOT exit while the model call is running; the driver killed it after 17 seconds."],
+  ["02B-interrupt-mid-stream", "stop-interrupt-request", "An interrupt control request in the middle of a streamed answer: control_response{still_queued}, the partial assistant message (aborted: true), a user message '[Request interrupted by user]', result/error_during_execution, session_state_changed idle; then stdin closed; exit code 1."],
+  ["02E-interrupt-then-second-message", "stop-interrupt-then-another-message", "The same interrupt, then a second user message on the same process: it is answered normally; exit code 0."],
+  ["02C-killed-mid-stream", "stop-killed-mid-stream", "The process killed in the middle of a streamed answer: nothing more on stdout or stderr."],
+  ["02D-stdin-closed-before-reply", "stdin-closed-before-the-reply", "stdin closed as soon as initialize was answered, before the model replied: the turn still runs to its result; exit code 0."],
+  ["03-no-credentials", "fail-no-credentials", "No key, no token, an empty home: an assistant message with error 'authentication_failed' and the text 'Not logged in · Please run /login', a result with subtype success but is_error true; exit code 1; nothing on stderr. No network request was attempted."],
+  ["08-oauth-token-rejected", "fail-sign-in-token-rejected-401", "A (fake) CLAUDE_CODE_OAUTH_TOKEN that the API turns down with 401 'OAuth token has expired'."],
+  ["03-api-401", "fail-api-401", "The API answers 401 authentication_error to a bearer token."],
+  ["03-api-402", "fail-api-402", "The API answers 402 billing_error."],
+  ["03-api-403", "fail-api-403", "The API answers 403 permission_error."],
+  ["03-api-404model", "fail-unknown-model-404", "A model the API does not know (404 not_found_error): stderr carries '[claude-code:unrecognized_model] ...', the assistant error is 'model_not_found'."],
+  ["03-api-429", "fail-api-429", "The API answers 429 rate_limit_error (retries off)."],
+  ["03-api-500", "fail-api-500", "The API answers 500 api_error (retries off)."],
+  ["03-api-529", "fail-api-529", "The API answers 529 overloaded_error (retries off)."],
+  ["03-api-400", "fail-api-400", "The API answers 400 invalid_request_error."],
+  ["03-unreachable", "fail-host-unreachable", "Nothing listens at the API address (connection refused)."],
+  ["03-resume-unknown-uuid", "fail-resume-unknown-session", "--resume with a well-formed id that has no transcript: one result/error_during_execution and nothing else (initialize is never answered), the same words on stderr; exit code 1."],
+  ["03-resume-not-a-uuid", "fail-resume-not-a-uuid", "--resume with a value that is not a UUID."],
+  ["03-max-turns", "fail-max-turns", "--max-turns=2 with a model that keeps calling a tool: result/error_max_turns; exit code 1."],
+  ["03-max-budget", "fail-max-budget", "--max-budget-usd=0.01 with one expensive call: result/error_max_budget_usd; exit code 1."],
+  ["03-bad-flag", "fail-unknown-flag", "An unknown command-line flag: nothing on stdout, 'error: unknown option ...' on stderr; exit code 1."],
+  ["03-api-key-approved", "anthropic-key-approved", "ANTHROPIC_API_KEY (fake) with its last 20 characters approved in the home's .claude.json, host-managed: apiKeySource 'ANTHROPIC_API_KEY'."],
+  ["03-api-key-unapproved", "anthropic-key-not-approved", "The same key with no approval in the home and not host-managed: in this non-interactive mode the program still reports apiKeySource 'ANTHROPIC_API_KEY' and answers."],
+  ["07-no-initialize", "no-initialize-request", "Only a user message on stdin, no initialize request: the program answers with its own default system prompt."],
+];
+for (const [src, dst, description, opts] of REAL) {
+  const r = read(`real/${src}.json`);
+  write(`real/${dst}.json`, clean({
+    name: dst,
+    description,
+    how: "The real claude 2.1.319 started directly (no SDK) with stdin, stdout and stderr as pipes, in an empty home, with a fake credential, against a loopback stand-in for the Messages API. t is milliseconds from the start of the process.",
+    argv: r.argv,
+    exit: { code: r.exitCode, signal: r.signal, at_ms: r.exitAt },
+    stderr: r.stderr,
+    stdin_written: r.sent.map((s) => (s.line ? { t: s.t, json: s.line } : { t: s.t, event: s.event })),
+    stdout: r.stdout.map((o) => (o.msg ? { t: o.t, json: trim(o.msg, opts) } : { t: o.t, text: o.raw })),
+  }));
+}
+write("real/session-transcript.jsonl", str(fs.readFileSync(`${SCRATCH}/real/04-transcript.jsonl`, "utf8")));
+write("real/system-prompt-forms.json", clean({
+  description: "What reaches the Messages API as `system` for each way of giving the system prompt. The first block is the program's billing header, the second its own identity line; the caller's prompt is the third.",
+  cases: read("real/07-system-prompt-summary.json"),
+}));
+
+{
+  // where the two-turn session's files ended up, with the part of each name that comes from this machine cut off
+  const ws = path.win32.normalize(`${SCRATCH}/ws/session ws.dir_1`);
+  const home = `${SCRATCH}/homes/session/.claude`;
+  const scratchSlug = slug(path.win32.normalize(SCRATCH));
+  const tree = [];
+  const walkTree = (dir, depth) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      tree.push(`${"  ".repeat(depth)}${e.name.replace(scratchSlug, "<SCRATCH_AS_FOLDER_NAME>").replace(/\.backup\.\d+$/, ".backup.<time>")}${e.isDirectory() ? "/" : ""}`);
+      if (e.isDirectory() && depth < 4) walkTree(path.join(dir, e.name), depth + 1);
+    }
+  };
+  walkTree(home, 0);
+  write("real/transcript-location.json", {
+    description: "Where the program kept the two-turn session of turn-bash-tool-call.json and turn-resumed-session.json. CLAUDE_CONFIG_DIR was <HOME>\\.claude. <SCRATCH_AS_FOLDER_NAME> is <SCRATCH> with every character that is not a letter or digit replaced by '-', like the rest of the name.",
+    working_folder: "<SCRATCH>\\ws\\session ws.dir_1",
+    project_folder_name: slug(ws).replace(scratchSlug, "<SCRATCH_AS_FOLDER_NAME>"),
+    config_folder_after_the_second_turn: tree,
+  });
+}
+write("real/rust-probe-output.txt", str(fs.readFileSync(`${SCRATCH}/real/12-rust-probe.txt`, "utf8").replace(/\r\n/g, "\n")));
+write("real/entrypoint-markers.json", clean({
+  description: "What CLAUDE_CODE_ENTRYPOINT and CLAUDE_AGENT_SDK_VERSION (both added to the environment by the SDK) change in the program's requests to the Messages API.",
+  cases: read("real/09-entrypoint-markers.json"),
+}));
+
+// --- wire/ ---
+for (const f of fs.readdirSync(`${SCRATCH}/wire`).filter((x) => x.endsWith(".json")).sort()) {
+  const w = read(`wire/${f}`);
+  const keep = f === "sdk-mcp-tool-call.json";
+  w.wire = w.wire.map((l) => (l.json ? { ...l, json: keep && l.json.type === "control_request" ? l.json : trim(l.json) } : l));
+  write(`wire/${f}`, clean(w));
+}
+
+// --- mcp-http/ ---
+/** How many stdout lines of each kind a run wrote (to show, for one thing, that there was no control_request). */
+function tally(r) {
+  const out = {};
+  for (const o of r.stdout) {
+    const m = o.msg;
+    const k = !m ? "not JSON" : m.type + (m.subtype ? `/${m.subtype}` : "") + (m.type === "control_request" ? `:${m.request?.subtype}` : "");
+    out[k] = (out[k] || 0) + 1;
+  }
+  return out;
+}
+const MCP = [
+  ["05-mcp-http-basic", "bearer-token-inline", "--mcp-config followed by inline JSON: {mcpServers:{tarsee:{type:'http', url, headers:{Authorization:'Bearer <TOKEN>'}}}}."],
+  ["05-mcp-http-alwaysload", "always-load", "The same with alwaysLoad: true."],
+  ["05-mcp-http-envtoken", "token-from-environment", "headers {Authorization: 'Bearer ${TARSEE_MCP_TOKEN}'} with TARSEE_MCP_TOKEN in the program's environment: the program fills it in, so the token is not on the command line."],
+  ["05-mcp-http-file", "config-from-a-file", "--mcp-config followed by the path of a JSON file."],
+  ["05-mcp-http-eq", "one-argument-form", "--mcp-config=<json> as a single argument."],
+  ["05-mcp-http-sessionid", "server-with-session-id", "A server that returns an Mcp-Session-Id header on initialize: the program sends it back on every later request."],
+  ["05-mcp-http-wrongtoken", "wrong-token-401", "The server answers 401: system/init reports the server as failed and the turn runs without its tools."],
+  ["05-mcp-http-down", "nothing-listening", "Nothing listens at the address: the same."],
+];
+for (const [src, dst, description] of MCP) {
+  const m = read(`real/${src}.mcp.json`);
+  const r = read(`real/${src}.json`);
+  const api = read(`real/${src}.api.json`);
+  const init = r.stdout.map((o) => o.msg).find((x) => x?.type === "system" && x.subtype === "init");
+  write(`mcp-http/${dst}.json`, clean({
+    name: dst, description,
+    how: "The real claude 2.1.319 pointed at a small local HTTP server that logs every request and answers initialize, tools/list and tools/call; a loopback stand-in for the Messages API scripted a call to mcp__tarsee__tarsee_datetime.",
+    mcp_arguments: m.argv_mcp,
+    exit_code: r.exitCode,
+    system_init: { mcp_servers: init?.mcp_servers, tools: init?.tools },
+    stdout_message_counts: tally(r),
+    tools_offered_to_the_model_in_each_api_request: api.map((q) => (q.body?.tools || []).map((x) => x.name)),
+    requests_the_server_received: m.requests.map((q) => ({ method: q.method, path: q.path, answered_with_status: q.answered, headers: q.headers, body: q.body })),
+    tool_messages_on_stdout: r.stdout.map((o) => o.msg).filter((x) => x && (x.type === "assistant" || x.type === "user" || x.type === "result")).map((x) => (x.type === "result" ? { type: "result", subtype: x.subtype, is_error: x.is_error, result: x.result } : { type: x.type, content: x.message.content })),
+  }));
+}
+{
+  const reqs = read("real/06-mcp-node-endpoint.requests.json");
+  const r = read("real/06-mcp-node-endpoint-recorded.json");
+  const init = r.stdout.map((o) => o.msg).find((x) => x?.type === "system" && x.subtype === "init");
+  write("mcp-http/tarsee-node-endpoint.json", clean({
+    name: "tarsee-node-endpoint",
+    description: "The real claude 2.1.319 pointed at Tarsee's own loopback MCP endpoint, the Node src/ai/mcp-http.js (startMcpHttp + grantTurn), through a recording pass-through: every request and the endpoint's answer. The bearer token came from the environment (${TARSEE_MCP_TOKEN}).",
+    exit_code: r.exitCode,
+    system_init: { mcp_servers: init?.mcp_servers, tools: init?.tools },
+    tools_offered_to_the_model_in_each_api_request: read("real/06-mcp-node-endpoint-recorded.api-tools.json"),
+    stdout_message_counts: tally(r),
+    exchanges: reqs.map((q) => ({
+      method: q.method, path: q.path, request_headers: q.headers, request_body: q.body, status: q.status, response_content_type: q.responseHeaders?.["content-type"],
+      response_body: q.response?.result?.tools ? { ...q.response, result: { tools: `<${q.response.result.tools.length} tools: ${q.response.result.tools.map((x) => x.name).join(", ")}>` } } : q.response,
+    })),
+    tool_messages_on_stdout: r.stdout.map((o) => o.msg).filter((x) => x && (x.type === "assistant" || x.type === "user" || x.type === "result")).map((x) => (x.type === "result" ? { type: "result", subtype: x.subtype, is_error: x.is_error, result: x.result } : { type: x.type, content: x.message.content })),
+  }));
+}
+
+write("mcp-http/other-checks.json", clean({
+  description: "Two more questions about the HTTP server config, each answered with the real program: can the config file be deleted once the program has started, and may the server answer an older protocol version.",
+  cases: read("real/08-mcp-summary.json"),
+}));
+
+write("mcp-http/tool-errors.json", clean({
+  description: "How a failed tool call on the HTTP MCP server comes out on the program's stdout: the user message's tool_result has is_error true, and its content is a plain string (a successful call's content is an array of blocks).",
+  cases: read("real/11-mcp-error.json"),
+}));
+
+// --- scripts/ ---
+const SCRIPTS = ["capture-lib.mjs", "cap-fixtures.mjs", "tee-capture.mjs", "real-drive.mjs", "real-01-basic.mjs", "real-02-stop.mjs", "real-03-failures.mjs", "real-04-session.mjs", "real-05-mcp-http.mjs", "real-06-mcp-node-endpoint.mjs", "real-07-system-prompt.mjs", "real-08-more.mjs", "real-09-entrypoint.mjs", "real-10-cost.mjs", "real-11-mcp-error.mjs", "build-fixtures.mjs", "stub/stub-claude.mjs", "stub/trampoline.rs", "stub/rust-probe.rs", "classify.mjs"];
+for (const s of SCRIPTS) write(`scripts/${path.basename(s)}.txt`, fs.readFileSync(`${SCRATCH}/${s}`, "utf8"));
+
+// --- a last look for anything of this machine ---
+const bad = [
+  // a drive letter followed by a folder (in either slash form, also as it looks inside JSON text)
+  /[A-Za-z]:[\\/]+(?:tmp|Users|Program|Windows[\\/]+Temp)/i,
+  // the names of the scratch folder, the Node checkout and their parent folders
+  new RegExp([SCRATCH, NODE_PROJECT, path.dirname(SCRATCH), path.dirname(NODE_PROJECT)].map((p) => esc(path.basename(p))).filter((x) => x.length > 3).join("|")),
+  new RegExp(esc(os.hostname()), "i"),
+  new RegExp(esc(os.userInfo().username)),
+  // anything shaped like a key (the fake ones are built from parts in the scripts, so their source does not match)
+  /sk-ant-(?:api|oat)[0-9][0-9]-[A-Za-z0-9_-]{8,}/,
+  /sk-or-v1-[A-Za-z0-9]{8,}/,
+  new RegExp("sk-" + "test-not"),
+];
+let problems = 0;
+const walk = (dir) => { for (const e of fs.readdirSync(dir, { withFileTypes: true })) { const p = path.join(dir, e.name); if (e.isDirectory()) walk(p); else { const text = fs.readFileSync(p, "utf8"); for (const re of bad) { const m = re.exec(text); if (m) { problems++; console.log(`LEAK ${path.relative(OUT, p)}: ${re} -> ${text.slice(Math.max(0, m.index - 60), m.index + 80).replace(/\s+/g, " ")}`); } } } } };
+walk(OUT);
+let total = 0, files = 0;
+const size = (dir) => { for (const e of fs.readdirSync(dir, { withFileTypes: true })) { const p = path.join(dir, e.name); if (e.isDirectory()) size(p); else { total += fs.statSync(p).size; files++; } } };
+size(OUT);
+console.log(`${files} files, ${(total / 1024).toFixed(0)} KB, ${problems} problems`);

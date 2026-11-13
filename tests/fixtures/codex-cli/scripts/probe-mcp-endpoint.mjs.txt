@@ -1,0 +1,57 @@
+#!/usr/bin/env node
+/**
+ * probe-mcp-endpoint.mjs: what Tarsee's own loopback MCP endpoint (the Node version's src/ai/mcp-http.js) answers to
+ * the three requests the real codex sends at the start of every turn (recorded in real/real-01-new-thread.json), sent
+ * here with the same headers and bodies; and what it answers to a wrong token, a GET, and a revoked grant. The Rust
+ * endpoint must give codex the same.
+ *
+ *   node probe-mcp-endpoint.mjs
+ */
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+const PROJECT = process.env.CAPTURE_PROJECT || "/path/to/the/node/checkout";
+const SCRATCH = process.env.CAPTURE_SCRATCH || "/path/to/a/scratch/folder";
+process.env.TARSEE_STATE_DIR = path.join(SCRATCH, "tarsee-state");
+const from = (rel) => import(pathToFileURL(path.join(PROJECT, rel)).href);
+const { startMcpHttp, grantTurn, stopMcpHttp } = await from("src/ai/mcp-http.js");
+
+const stateDir = path.join(SCRATCH, "runs-other", "mcp-endpoint-state");
+fs.mkdirSync(stateDir, { recursive: true });
+await startMcpHttp({ stateDir });
+const grant = await grantTurn({ conversationId: "capture", turnId: "capture-turn" }, { turnId: "capture-turn" });
+
+const base = { "user-agent": "codex-mcp-client/0.167.0", accept: "text/event-stream, application/json", "content-type": "application/json", authorization: `Bearer ${grant.token}` };
+const withVersion = { ...base, "mcp-protocol-version": "2025-06-18" };
+const send = async (headers, body, method = "POST") => {
+  const res = await fetch(grant.url, { method, headers, body: method === "POST" ? JSON.stringify(body) : undefined });
+  const text = await res.text();
+  let json = null;
+  try { json = JSON.parse(text); } catch { /* not JSON */ }
+  return { request: { method, headers, body }, answer: { status: res.status, headers: Object.fromEntries(res.headers.entries()), body: json ?? text } };
+};
+
+const out = {};
+out.initialize = await send(base, { jsonrpc: "2.0", id: 0, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: { elicitation: { form: {}, url: {} } }, clientInfo: { name: "codex-mcp-client", title: "Codex", version: "0.167.0" } } });
+out.initialized = await send(withVersion, { jsonrpc: "2.0", method: "notifications/initialized" });
+out.toolsList = await send(withVersion, { jsonrpc: "2.0", id: 1, method: "tools/list", params: { _meta: { progressToken: 0 } } });
+const tools = out.toolsList.answer.body?.result?.tools;
+if (Array.isArray(tools)) out.toolsList.answer.body.result.tools = [tools[0], { "(capture note)": `${tools.length - 1} more tools, same shape`, names: tools.slice(1).map((t) => t.name) }];
+out.wrongToken = await send({ ...withVersion, authorization: "Bearer wrong" }, { jsonrpc: "2.0", id: 2, method: "tools/list" });
+out.getInsteadOfPost = await send(withVersion, null, "GET");
+await grant.revoke();
+out.afterTheGrantWasRevoked = await send(withVersion, { jsonrpc: "2.0", id: 3, method: "tools/list" });
+await stopMcpHttp();
+
+const fixture = {
+  name: "other-06-tarsee-mcp-endpoint",
+  what: "The answers of Tarsee's own MCP endpoint (Node version, src/ai/mcp-http.js) to codex's three start-of-turn requests, replayed with codex's headers; then a wrong token, a GET, and a request after the grant was revoked.",
+  made_with: { endpoint: "src/ai/mcp-http.js startMcpHttp() + grantTurn()", platform: process.platform },
+  ...out,
+};
+const text = JSON.stringify(fixture, null, 2).split(grant.token).join("<MCP_TOKEN>").replace(/127\.0\.0\.1:\d{4,5}/g, "127.0.0.1:<PORT>");
+fs.mkdirSync(path.join(SCRATCH, "fixtures-other"), { recursive: true });
+fs.writeFileSync(path.join(SCRATCH, "fixtures-other", "other-06-tarsee-mcp-endpoint.json"), `${text}\n`);
+console.log(`other-06-tarsee-mcp-endpoint: ${Object.entries(out).map(([k, v]) => `${k} ${v.answer.status}`).join(", ")}`);
+process.exit(0);

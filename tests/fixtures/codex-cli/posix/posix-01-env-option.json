@@ -1,0 +1,72 @@
+{
+  "name": "posix-01-env-option",
+  "what": "The caller passes `env`: the child gets exactly those names plus CODEX_INTERNAL_ORIGINATOR_OVERRIDE, and nothing from the caller's own environment (unlike Windows, where Node fills in a few system names).",
+  "made_with": {
+    "sdk": "@openai/codex-sdk 0.167.0, called directly",
+    "platform": "linux (WSL)",
+    "node": "v22.22.2"
+  },
+  "sdk": {
+    "new Codex(options)": {
+      "env": {
+        "FROM_ENV_OPTION": "the env option"
+      },
+      "codexPathOverride": "<CODEX_BIN>"
+    },
+    "callerProcessEnvNames": [
+      "FROM_PROCESS_ENV",
+      "PATH",
+      "TARSEE_STATE_DIR"
+    ]
+  },
+  "child": {
+    "argv": [
+      "exec",
+      "--experimental-json"
+    ],
+    "cwd": "<CALLER_CWD>",
+    "envNames": [
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+      "FROM_ENV_OPTION"
+    ],
+    "envValues": {
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE": "codex_sdk_ts",
+      "FROM_ENV_OPTION": "the env option"
+    },
+    "processGroup": {
+      "sameGroupAsTheCaller": true,
+      "sameSessionAsTheCaller": true,
+      "isItsOwnGroupLeader": false
+    },
+    "stdin": {
+      "chunks": [
+        {
+          "at_ms": 5,
+          "bytes": 5
+        }
+      ],
+      "eof_at_ms": 6,
+      "bytes": 5,
+      "text": "hello"
+    }
+  },
+  "stub": {
+    "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"01a1c000-0000-7000-8000-0000000000cc\"}\n{\"type\":\"turn.started\"}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":10,\"cached_input_tokens\":0,\"output_tokens\":2,\"reasoning_output_tokens\":0}}\n",
+    "stderr": "",
+    "exitCode": 0,
+    "staysAliveMs": 0,
+    "ignoresSignals": false
+  },
+  "sdkYielded": [
+    "thread.started",
+    "turn.started",
+    "item.completed",
+    "turn.completed"
+  ],
+  "sdkThrew": null,
+  "timing": {
+    "iterationEndedAt_ms": 61
+  },
+  "signalsTheStubReceived": [],
+  "stubStillRunningAfterwards": false
+}

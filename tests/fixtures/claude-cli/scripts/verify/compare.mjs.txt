@@ -1,0 +1,22 @@
+import fs from "node:fs";
+const FX = process.env.TARSEE_FIXTURES + "/sdk/"; // tests/fixtures/claude-cli
+const pairs = [["a-plan-plain", "01"], ["b-plan-resume", "02"], ["c-plan-media", "04"], ["d-plan-media", "05"], ["e-plan-real-mcp", "08"], ["f-anthropic", "10"], ["g-deepseek-default", "11"], ["h-deepseek-pro", "12"], ["i-openrouter", "13"], ["j-http-mcp", "21"], ["k-stop-hang", "14"], ["m-stop-exits", "15"], ["o-exit1", "18"], ["s-program-not-found", "22"], ["p-exit0", "23"], ["r-exit0-mid", "24"]];
+const mine = fs.readdirSync("out").filter((f) => f.endsWith(".json"));
+const fxs = fs.readdirSync(FX);
+const norm = (a) => a.replace(/--model=claude-(opus|sonnet|haiku)[-\d]*/, "--model=claude-$1").replace(/--fallback-model=.*/, (m) => m.replace(/claude-(opus|sonnet|haiku)[-\d]*/g, "claude-$1")).replace(/--add-dir=.*/, "--add-dir=<SKILLS>").replace(/--max-turns=\d+/, "--max-turns=N").replace(/"url":"http:\/\/127\.0\.0\.1:\d+\/mcp"/, '"url":"<URL>"');
+const shape = (o, d = 0) => (Array.isArray(o) ? (d > 3 ? "[…]" : o.slice(0, 3).map((x) => shape(x, d + 1))) : o && typeof o === "object" ? Object.fromEntries(Object.keys(o).map((k) => [k, d > 3 ? "…" : shape(o[k], d + 1)])) : typeof o);
+for (const [m, f] of pairs) {
+  const mf = mine.find((x) => x.startsWith(m)); const ff = fxs.find((x) => x.startsWith(f));
+  const a = JSON.parse(fs.readFileSync("out/" + mf, "utf8")); const b = JSON.parse(fs.readFileSync(FX + ff, "utf8"));
+  const av = (a.argv || []).map(norm), bv = (b.spawn?.argv || []).map(norm);
+  const argvSame = JSON.stringify(av) === JSON.stringify(bv);
+  const as = a.stdin.map((s) => JSON.stringify(shape(s.json))), bs = (b.stdin || []).map((s) => JSON.stringify(shape(s.json)));
+  const stdinSame = JSON.stringify(as) === JSON.stringify(bs);
+  const ae = a.tarsee_events.filter((e) => e.type !== "step").map((e) => e.type + (e.stopReason ? ":" + e.stopReason : "") + (e.code ? ":" + e.code : "")), be = (b.tarsee_events || []).filter((e) => e.type !== "step").map((e) => e.type + (e.stopReason ? ":" + e.stopReason : "") + (e.code ? ":" + e.code : ""));
+  console.log(`${mf} vs ${ff}: argv ${argvSame ? "same" : "DIFFERENT"} | stdin shapes ${stdinSame ? "same" : "DIFFERENT"} | events ${JSON.stringify(ae) === JSON.stringify(be) ? "same" : "mine " + ae.join(",") + " / fixture " + be.join(",")}`);
+  if (!argvSame) { console.log("   mine   : " + av.join(" ")); console.log("   fixture: " + bv.join(" ")); }
+  if (!stdinSame) { console.log("   mine   : " + as.map((s) => s.slice(0, 300)).join("\n            ")); console.log("   fixture: " + bs.map((s) => s.slice(0, 300)).join("\n            ")); }
+  const ch = b.env?.sdk_changes; if (ch) console.log(`   fixture env changes: +${Object.keys(ch.added).join(",")} -${ch.removed.join(",")} ~${Object.keys(ch.changed).join(",")}`);
+  const em = (x) => (x.tarsee_events || []).filter((e) => e.type === "error").map((e) => e.message.slice(0, 140)).join(" | ");
+  if (em(a) || em(b)) console.log(`   error words mine: ${em(a)}\n   error words fix : ${em(b)}`);
+}

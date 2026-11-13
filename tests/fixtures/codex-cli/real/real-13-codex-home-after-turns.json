@@ -1,0 +1,307 @@
+{
+  "name": "real-13-codex-home-after-turns",
+  "what": "A Codex home after a real turn and a resumed one (the home real-01 and real-02 left): the rollout's line types and its token_count lines (what Tarsee reads usage from), and in the six sqlite databases the `threads` table's columns and every table with a thread column (what Tarsee's retention deletes from).",
+  "made_with": {
+    "program": "codex 0.167.0 (the real pinned program)",
+    "platform": "win32"
+  },
+  "rollout": {
+    "fileRelativeToTheHome": "sessions/2026/11/13/rollout-2026-11-13T08-16-53-<THREAD_ID>.jsonl",
+    "note": "the folder and the time in the name are the machine's local time; session_meta.timestamp is UTC",
+    "lines": 28,
+    "topLevelKeysOfEveryLine": [
+      "timestamp",
+      "ordinal",
+      "type",
+      "payload"
+    ],
+    "lineTypesAndCounts": {
+      "session_meta": 1,
+      "event_msg:task_started": 2,
+      "response_item:message": 6,
+      "world_state": 1,
+      "turn_context": 2,
+      "event_msg:thread_settings_applied": 2,
+      "event_msg:item_completed": 6,
+      "response_item:reasoning": 2,
+      "token_usage_record": 2,
+      "event_msg:token_count": 2,
+      "event_msg:task_complete": 2
+    },
+    "sessionMeta": {
+      "timestamp": "2026-11-13T00:16:53.520Z",
+      "payloadKeys": [
+        "session_id",
+        "id",
+        "timestamp",
+        "cwd",
+        "runtime_workspace_roots",
+        "originator",
+        "cli_version",
+        "source",
+        "thread_source",
+        "model_provider",
+        "base_instructions",
+        "history_mode",
+        "context_window"
+      ],
+      "id": "<THREAD_ID>",
+      "originator": "codex_sdk_ts",
+      "cli_version": "0.167.0",
+      "source": "exec",
+      "thread_source": "user",
+      "model_provider": "tarsee_local"
+    },
+    "tokenCountLines": [
+      {
+        "timestamp": "2026-11-13T00:16:53.692Z",
+        "ordinal": 14,
+        "type": "event_msg",
+        "payload": {
+          "type": "token_count",
+          "info": {
+            "total_token_usage": {
+              "input_tokens": 1200,
+              "cached_input_tokens": 200,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 30,
+              "reasoning_output_tokens": 12,
+              "total_tokens": 1230
+            },
+            "last_token_usage": {
+              "input_tokens": 1200,
+              "cached_input_tokens": 200,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 30,
+              "reasoning_output_tokens": 12,
+              "total_tokens": 1230
+            },
+            "last_usage_includes_reasoning": false,
+            "model_context_window": 121600
+          },
+          "rate_limits": {
+            "limit_id": "codex",
+            "limit_name": null,
+            "primary": null,
+            "secondary": null,
+            "credits": null,
+            "individual_limit": null,
+            "spend_control_reached": null,
+            "plan_type": null,
+            "rate_limit_reached_type": null
+          }
+        }
+      },
+      {
+        "timestamp": "2026-11-13T00:16:55.190Z",
+        "ordinal": 26,
+        "type": "event_msg",
+        "payload": {
+          "type": "token_count",
+          "info": {
+            "total_token_usage": {
+              "input_tokens": 2400,
+              "cached_input_tokens": 400,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 60,
+              "reasoning_output_tokens": 24,
+              "total_tokens": 2460
+            },
+            "last_token_usage": {
+              "input_tokens": 1200,
+              "cached_input_tokens": 200,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 30,
+              "reasoning_output_tokens": 12,
+              "total_tokens": 1230
+            },
+            "last_usage_includes_reasoning": false,
+            "model_context_window": 121600
+          },
+          "rate_limits": {
+            "limit_id": "codex",
+            "limit_name": null,
+            "primary": null,
+            "secondary": null,
+            "credits": null,
+            "individual_limit": null,
+            "spend_control_reached": null,
+            "plan_type": null,
+            "rate_limit_reached_type": null
+          }
+        }
+      }
+    ]
+  },
+  "databases": {
+    "state_5.sqlite": {
+      "tables": [
+        "_sqlx_migrations",
+        "backfill_state",
+        "external_agent_config_imports",
+        "guardian_review_feedback",
+        "project_idempotency_keys",
+        "project_roots",
+        "projects",
+        "remote_control_enrollments",
+        "rollout_migration_skipped_rollouts",
+        "rollout_migration_state",
+        "sqlite_sequence",
+        "thread_attachments",
+        "thread_dynamic_tools",
+        "thread_read_receipts",
+        "thread_sections",
+        "thread_spawn_edges",
+        "threads"
+      ],
+      "tablesWithAThreadColumn": {
+        "guardian_review_feedback": [
+          "thread_id"
+        ],
+        "thread_attachments": [
+          "thread_id"
+        ],
+        "thread_dynamic_tools": [
+          "thread_id"
+        ],
+        "thread_read_receipts": [
+          "thread_id"
+        ],
+        "thread_spawn_edges": [
+          "parent_thread_id",
+          "child_thread_id"
+        ]
+      },
+      "threadsColumns": [
+        "id TEXT",
+        "rollout_path TEXT",
+        "created_at INTEGER",
+        "updated_at INTEGER",
+        "source TEXT",
+        "model_provider TEXT",
+        "cwd TEXT",
+        "title TEXT",
+        "sandbox_policy TEXT",
+        "approval_mode TEXT",
+        "tokens_used INTEGER",
+        "has_user_event INTEGER",
+        "archived INTEGER",
+        "archived_at INTEGER",
+        "git_sha TEXT",
+        "git_branch TEXT",
+        "git_origin_url TEXT",
+        "cli_version TEXT",
+        "first_user_message TEXT",
+        "agent_nickname TEXT",
+        "agent_role TEXT",
+        "memory_mode TEXT",
+        "model TEXT",
+        "reasoning_effort TEXT",
+        "agent_path TEXT",
+        "created_at_ms INTEGER",
+        "updated_at_ms INTEGER",
+        "thread_source TEXT",
+        "preview TEXT",
+        "recency_at INTEGER",
+        "recency_at_ms INTEGER",
+        "history_mode TEXT",
+        "name TEXT",
+        "is_pinned INTEGER",
+        "thread_section_id TEXT",
+        "section_position INTEGER",
+        "section_entered_at_ms INTEGER",
+        "project_id TEXT",
+        "originator TEXT",
+        "daybreak_enabled BOOLEAN",
+        "creator_user_id TEXT",
+        "creator_account_id TEXT",
+        "attached_thread_parent_id TEXT"
+      ],
+      "aThreadsRow": {
+        "id": "<THREAD_ID>",
+        "rollout_path": "\\\\?\\<CODEX_HOME>\\sessions\\2026\\11\\13\\rollout-2026-11-13T08-16-53-<THREAD_ID>.jsonl",
+        "updated_at": 1794529015,
+        "updated_at_ms": 1794529015214
+      }
+    },
+    "thread_history_1.sqlite": {
+      "tables": [
+        "_sqlx_migrations",
+        "thread_history_projection_state",
+        "thread_items",
+        "thread_realtime_items",
+        "thread_turns"
+      ],
+      "tablesWithAThreadColumn": {
+        "thread_history_projection_state": [
+          "thread_id"
+        ],
+        "thread_items": [
+          "thread_id"
+        ],
+        "thread_realtime_items": [
+          "thread_id"
+        ],
+        "thread_turns": [
+          "thread_id"
+        ]
+      }
+    },
+    "goals_1.sqlite": {
+      "tables": [
+        "_sqlx_migrations",
+        "thread_goal_continuation_deferrals",
+        "thread_goals"
+      ],
+      "tablesWithAThreadColumn": {
+        "thread_goal_continuation_deferrals": [
+          "thread_id"
+        ],
+        "thread_goals": [
+          "thread_id"
+        ]
+      }
+    },
+    "queue_1.sqlite": {
+      "tables": [
+        "_sqlx_migrations",
+        "queued_items",
+        "queued_thread_revisions",
+        "sqlite_sequence"
+      ],
+      "tablesWithAThreadColumn": {
+        "queued_items": [
+          "thread_id"
+        ],
+        "queued_thread_revisions": [
+          "thread_id"
+        ]
+      }
+    },
+    "memories_1.sqlite": {
+      "tables": [
+        "_sqlx_migrations",
+        "consolidation_progress",
+        "jobs",
+        "stage1_outputs"
+      ],
+      "tablesWithAThreadColumn": {
+        "stage1_outputs": [
+          "thread_id"
+        ]
+      }
+    },
+    "logs_2.sqlite": {
+      "tables": [
+        "_sqlx_migrations",
+        "logs",
+        "sqlite_sequence"
+      ],
+      "tablesWithAThreadColumn": {
+        "logs": [
+          "thread_id"
+        ]
+      }
+    }
+  }
+}

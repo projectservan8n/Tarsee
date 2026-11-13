@@ -1,0 +1,75 @@
+{
+  "name": "posix-05-killed-from-outside",
+  "what": "The program is killed from outside with SIGKILL mid-turn: the SDK throws `Codex Exec exited with signal SIGKILL: <stderr>`.",
+  "made_with": {
+    "sdk": "@openai/codex-sdk 0.167.0, called directly",
+    "platform": "linux (WSL)",
+    "node": "v22.22.2"
+  },
+  "sdk": {
+    "new Codex(options)": {
+      "env": {
+        "PATH": "/usr/bin:/bin"
+      },
+      "codexPathOverride": "<CODEX_BIN>"
+    },
+    "callerProcessEnvNames": [
+      "FROM_PROCESS_ENV",
+      "PATH",
+      "TARSEE_STATE_DIR"
+    ]
+  },
+  "child": {
+    "argv": [
+      "exec",
+      "--experimental-json"
+    ],
+    "cwd": "<CALLER_CWD>",
+    "envNames": [
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+      "PATH"
+    ],
+    "envValues": {
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE": "codex_sdk_ts",
+      "PATH": "/usr/bin:/bin"
+    },
+    "processGroup": {
+      "sameGroupAsTheCaller": true,
+      "sameSessionAsTheCaller": true,
+      "isItsOwnGroupLeader": false
+    },
+    "stdin": {
+      "chunks": [
+        {
+          "at_ms": 6,
+          "bytes": 5
+        }
+      ],
+      "eof_at_ms": 6,
+      "bytes": 5,
+      "text": "hello"
+    }
+  },
+  "stub": {
+    "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"01a1c000-0000-7000-8000-0000000000cc\"}\n{\"type\":\"turn.started\"}\n",
+    "stderr": "",
+    "exitCode": 0,
+    "staysAliveMs": 30000,
+    "ignoresSignals": false
+  },
+  "sdkYielded": [
+    "thread.started",
+    "turn.started"
+  ],
+  "sdkThrew": {
+    "name": "Error",
+    "message": "Codex Exec exited with signal SIGKILL: ",
+    "code": null
+  },
+  "timing": {
+    "sigkillAt_ms": 353,
+    "iterationEndedAt_ms": 359
+  },
+  "signalsTheStubReceived": [],
+  "stubStillRunningAfterwards": false
+}

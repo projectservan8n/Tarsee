@@ -1,0 +1,376 @@
+{
+  "name": "real-03-mcp-tool-call",
+  "what": "A turn in which the model calls one of Tarsee's tools (mcp__tarsee / tarsee_datetime): the tools/call request the program sends, with no approval asked (default_tools_approval_mode \"approve\"), and the mcp_tool_call items on stdout.",
+  "made_with": {
+    "program": "codex 0.167.0 (the real pinned program), started with the argument list, environment and stdin the SDK produced",
+    "platform": "win32"
+  },
+  "child": {
+    "program": "<CODEX_BIN>",
+    "stdin": "What time is it?"
+  },
+  "result": {
+    "exitCode": 0,
+    "stdoutLines": [
+      "{\"type\":\"thread.started\",\"thread_id\":\"<THREAD_ID>\"}",
+      "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Model metadata for `test-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.\"}}",
+      "{\"type\":\"turn.started\"}",
+      "{\"type\":\"item.started\",\"item\":{\"id\":\"item_1\",\"type\":\"mcp_tool_call\",\"server\":\"tarsee\",\"tool\":\"tarsee_datetime\",\"arguments\":{\"timezone\":\"UTC\"},\"result\":null,\"error\":null,\"status\":\"in_progress\"}}",
+      "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"mcp_tool_call\",\"server\":\"tarsee\",\"tool\":\"tarsee_datetime\",\"arguments\":{\"timezone\":\"UTC\"},\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"stub result of tarsee_datetime\"}],\"structured_content\":null},\"error\":null,\"status\":\"completed\"}}",
+      "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_2\",\"type\":\"agent_message\",\"text\":\"It is stub o'clock.\"}}",
+      "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1000,\"cached_input_tokens\":0,\"cache_write_input_tokens\":0,\"output_tokens\":19,\"reasoning_output_tokens\":0}}"
+    ],
+    "stderr": "Reading prompt from stdin...\n"
+  },
+  "requestsToTheMcpServer": [
+    {
+      "n": 1,
+      "at_ms": 384,
+      "method": "POST",
+      "path": "/mcp",
+      "httpVersion": "1.1",
+      "headers": [
+        [
+          "user-agent",
+          "codex-mcp-client/0.167.0"
+        ],
+        [
+          "accept",
+          "text/event-stream, application/json"
+        ],
+        [
+          "content-type",
+          "application/json"
+        ],
+        [
+          "authorization",
+          "Bearer <MCP_TOKEN>"
+        ],
+        [
+          "host",
+          "127.0.0.1:<MCP_PORT>"
+        ],
+        [
+          "content-length",
+          "217"
+        ]
+      ],
+      "body": {
+        "jsonrpc": "2.0",
+        "id": 0,
+        "method": "initialize",
+        "params": {
+          "protocolVersion": "2025-06-18",
+          "capabilities": {
+            "elicitation": {
+              "form": {},
+              "url": {}
+            }
+          },
+          "clientInfo": {
+            "name": "codex-mcp-client",
+            "title": "Codex",
+            "version": "0.167.0"
+          }
+        }
+      },
+      "answer": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "result": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {
+              "tools": {
+                "listChanged": true
+              }
+            },
+            "serverInfo": {
+              "name": "tarsee",
+              "version": "1.0.0"
+            }
+          },
+          "jsonrpc": "2.0",
+          "id": 0
+        }
+      }
+    },
+    {
+      "n": 2,
+      "at_ms": 385,
+      "method": "POST",
+      "path": "/mcp",
+      "httpVersion": "1.1",
+      "headers": [
+        [
+          "user-agent",
+          "codex-mcp-client/0.167.0"
+        ],
+        [
+          "mcp-protocol-version",
+          "2025-06-18"
+        ],
+        [
+          "accept",
+          "text/event-stream, application/json"
+        ],
+        [
+          "content-type",
+          "application/json"
+        ],
+        [
+          "authorization",
+          "Bearer <MCP_TOKEN>"
+        ],
+        [
+          "host",
+          "127.0.0.1:<MCP_PORT>"
+        ],
+        [
+          "content-length",
+          "54"
+        ]
+      ],
+      "body": {
+        "jsonrpc": "2.0",
+        "method": "notifications/initialized"
+      },
+      "answer": {
+        "status": 202,
+        "headers": {},
+        "body": null
+      }
+    },
+    {
+      "n": 3,
+      "at_ms": 387,
+      "method": "POST",
+      "path": "/mcp",
+      "httpVersion": "1.1",
+      "headers": [
+        [
+          "user-agent",
+          "codex-mcp-client/0.167.0"
+        ],
+        [
+          "mcp-protocol-version",
+          "2025-06-18"
+        ],
+        [
+          "accept",
+          "text/event-stream, application/json"
+        ],
+        [
+          "content-type",
+          "application/json"
+        ],
+        [
+          "authorization",
+          "Bearer <MCP_TOKEN>"
+        ],
+        [
+          "host",
+          "127.0.0.1:<MCP_PORT>"
+        ],
+        [
+          "content-length",
+          "85"
+        ]
+      ],
+      "body": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list",
+        "params": {
+          "_meta": {
+            "progressToken": 0
+          }
+        }
+      },
+      "answer": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "result": {
+            "tools": [
+              {
+                "name": "tarsee_datetime",
+                "description": "The current date and time.",
+                "inputSchema": {
+                  "type": "object",
+                  "properties": {
+                    "timezone": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false,
+                  "$schema": "http://json-schema.org/draft-07/schema#"
+                }
+              },
+              {
+                "name": "tarsee_remember",
+                "description": "Remember a fact.",
+                "inputSchema": {
+                  "type": "object",
+                  "properties": {
+                    "content": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "content"
+                  ],
+                  "additionalProperties": false,
+                  "$schema": "http://json-schema.org/draft-07/schema#"
+                }
+              }
+            ]
+          },
+          "jsonrpc": "2.0",
+          "id": 1
+        }
+      }
+    },
+    {
+      "n": 4,
+      "at_ms": 582,
+      "method": "POST",
+      "path": "/mcp",
+      "httpVersion": "1.1",
+      "headers": [
+        [
+          "user-agent",
+          "codex-mcp-client/0.167.0"
+        ],
+        [
+          "mcp-protocol-version",
+          "2025-06-18"
+        ],
+        [
+          "accept",
+          "text/event-stream, application/json"
+        ],
+        [
+          "content-type",
+          "application/json"
+        ],
+        [
+          "authorization",
+          "Bearer <MCP_TOKEN>"
+        ],
+        [
+          "host",
+          "127.0.0.1:<MCP_PORT>"
+        ],
+        [
+          "content-length",
+          "789"
+        ]
+      ],
+      "body": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+          "_meta": {
+            "callId": "call_1_0",
+            "x-codex-turn-metadata": {
+              "session_id": "<THREAD_ID>",
+              "thread_id": "<THREAD_ID>",
+              "model": "test-model",
+              "turn_id": "01a1d243-bb9d-7562-a67e-f86cc38101b8",
+              "turn_started_at_unix_ms": 1794529016746,
+              "thread_source": "user",
+              "turn_trigger": "exec",
+              "sandbox": "none",
+              "sandbox_mode": "danger-full-access",
+              "auto_review_enabled": false,
+              "node_repl_auto_review_required": false,
+              "node_repl_disabled": false,
+              "codex_version": "0.167.0"
+            },
+            "threadId": "<THREAD_ID>",
+            "sessionId": "<THREAD_ID>",
+            "windowId": "<THREAD_ID>:0",
+            "itemId": "fc_1_0",
+            "progressToken": 1
+          },
+          "name": "tarsee_datetime",
+          "arguments": {
+            "timezone": "UTC"
+          }
+        }
+      },
+      "answer": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "result": {
+            "content": [
+              {
+                "type": "text",
+                "text": "stub result of tarsee_datetime"
+              }
+            ]
+          },
+          "jsonrpc": "2.0",
+          "id": 2
+        }
+      }
+    }
+  ],
+  "requestsToTheModel": [
+    {
+      "method": "POST",
+      "path": "/v1/responses",
+      "authorization": "Bearer <PROVIDER_KEY>",
+      "model": "test-model",
+      "toolNames": [
+        "exec_command",
+        "write_stdin",
+        "list_mcp_resources",
+        "list_mcp_resource_templates",
+        "read_mcp_resource",
+        "request_user_input",
+        "view_image",
+        "mcp__tarsee"
+      ],
+      "inputTypes": [
+        "message:developer:input_text",
+        "message:developer:input_text+input_text+input_text",
+        "message:user:input_text",
+        "message:user:input_text"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v1/responses",
+      "authorization": "Bearer <PROVIDER_KEY>",
+      "model": "test-model",
+      "toolNames": [
+        "exec_command",
+        "write_stdin",
+        "list_mcp_resources",
+        "list_mcp_resource_templates",
+        "read_mcp_resource",
+        "request_user_input",
+        "view_image",
+        "mcp__tarsee"
+      ],
+      "inputTypes": [
+        "message:developer:input_text",
+        "message:developer:input_text+input_text+input_text",
+        "message:user:input_text",
+        "message:user:input_text",
+        "function_call",
+        "function_call_output"
+      ]
+    }
+  ]
+}

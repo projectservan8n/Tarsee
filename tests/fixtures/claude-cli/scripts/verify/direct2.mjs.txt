@@ -1,0 +1,14 @@
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+const SCRATCH = process.env.VERIFY_SCRATCH;
+process.env.DEBUG_CLAUDE_AGENT_SDK = "1";
+process.env.CLAUDE_CONFIG_DIR = path.join(SCRATCH, "dbghome");
+const sdk = await import(pathToFileURL(`${process.env.TARSEE_NODE_PROJECT}/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs`).href);
+const STUB = path.join(SCRATCH, "stub", "fake-claude.exe").replace(/\//g, "\\");
+const base = {}; for (const k of ["PATH", "PATHEXT", "SystemRoot", "SystemDrive", "COMSPEC", "TEMP", "TMP", "windir"]) if (process.env[k]) base[k] = process.env[k];
+const out = path.join(SCRATCH, "out", `direct-debugfile.stub.jsonl`); fs.rmSync(out, { force: true });
+for await (const m of sdk.query({ prompt: "hi", options: { pathToClaudeCodeExecutable: STUB, cwd: path.join(SCRATCH, "ws"), env: { ...base, VSTUB_OUT: out, VSTUB_SCENARIO: "turn", DEBUG: "canary" } } })) {}
+const stub = fs.readFileSync(out, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+console.log(JSON.stringify(stub[0].argv), "DEBUG=", stub[0].env.DEBUG, "DEBUG_CLAUDE_AGENT_SDK=", stub[0].env.DEBUG_CLAUDE_AGENT_SDK);
+process.exit(0);

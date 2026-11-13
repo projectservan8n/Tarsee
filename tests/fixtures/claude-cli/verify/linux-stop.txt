@@ -1,0 +1,7 @@
+--- ignore-term: abort at 510 ms; loop ended 2003 ms after the abort; process gone 7010 ms after the abort; thrown: Claude Code process aborted by user; messages seen: 2
+    stub, in ms after the abort: stdin closed 2, SIGTERM received 2001, SIGTERM received 2002
+    env names the program received: CLAUDE_AGENT_SDK_VERSION CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SDK_READS_SESSION_STATE HOME MADE_UP PATH VSTUB_OUT VSTUB_SCENARIO
+--- exit-on-term: abort at 515 ms; loop ended 2001 ms after the abort; process gone 2012 ms after the abort; thrown: Claude Code process aborted by user; messages seen: 2
+    stub, in ms after the abort: stdin closed 1, SIGTERM received 2000
+--- exit-on-stdin-close: abort at 520 ms; loop ended 8 ms after the abort; process gone 10 ms after the abort; thrown: Operation aborted; messages seen: 2
+    stub, in ms after the abort: stdin closed 1

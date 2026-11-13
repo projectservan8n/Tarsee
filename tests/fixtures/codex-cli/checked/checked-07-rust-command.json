@@ -1,0 +1,211 @@
+{
+ "name": "checked-07-rust-command",
+ "what": "What std::process::Command does on Windows with a turn's argument list and environment, checked with a launcher compiled for this (scripts/checked-launch.rs.txt, rustc 1.95): the argument list round trip, env_clear(), what spawn() returns when it cannot start the program, Child::kill(), a write to the stdin of a program that has exited; then the real codex started that way, with and without SYSTEMROOT, with CREATE_NO_WINDOW, ended with Child::kill() in the middle of a turn and with a command running; and what becomes of a child when its parent is killed, for a Node parent and for a Rust one.",
+ "made_with": {
+  "launcher": "scripts/checked-launch.rs.txt",
+  "scripts": "scripts/checked-rust-checks.mjs.txt, scripts/checked-real.mjs.txt (r10, r12), scripts/checked-orphan.mjs.txt",
+  "platform": "win32"
+ },
+ "argsRoundTrip": {
+  "given": 131,
+  "got": 131,
+  "identical": true,
+  "firstDifference": -1,
+  "childExit": "Some(7)"
+ },
+ "envClearNoVariables": {
+  "childExit": "Some(7)",
+  "childEnv": []
+ },
+ "envClearTwoVariables": {
+  "childExit": "Some(7)",
+  "childEnv": [
+   "ONLY_ONE=x",
+   "path=C:\\lower"
+  ]
+ },
+ "commandLineTooLong": {
+  "spawn_error_kind": "InvalidFilename",
+  "spawn_error_os": "Some(206)",
+  "spawn_error_text": "The filename or extension is too long. (os error 206)"
+ },
+ "commandLine32000": {
+  "result": {
+   "pid": "51644",
+   "wait": "Ok(ExitStatus(ExitStatus(7)))",
+   "exit_code": "Some(7)",
+   "waited_ms": "16",
+   "stdin_write": "Ok(())"
+  },
+  "arrived": 32000
+ },
+ "programMissing": {
+  "spawn_error_kind": "NotFound",
+  "spawn_error_os": "Some(2)",
+  "spawn_error_text": "The system cannot find the file specified. (os error 2)"
+ },
+ "childKill": {
+  "pid": "62912",
+  "kill_result": "Ok(())",
+  "killed_at_ms": "507",
+  "wait": "Ok(ExitStatus(ExitStatus(1)))",
+  "exit_code": "Some(1)",
+  "waited_ms": "512",
+  "stdin_write": "Ok(())"
+ },
+ "stdinWriteToAProgramThatExited": {
+  "pid": "16196",
+  "wait": "Ok(ExitStatus(ExitStatus(2)))",
+  "exit_code": "Some(2)",
+  "waited_ms": "43",
+  "stdin_write": "Err(\"BrokenPipe os=Some(109) The pipe has been ended. (os error 109)\")"
+ },
+ "smallStdinWriteToAProgramThatExited": {
+  "pid": "72140",
+  "wait": "Ok(ExitStatus(ExitStatus(2)))",
+  "exit_code": "Some(2)",
+  "waited_ms": "42",
+  "stdin_write": "Ok(())"
+ },
+ "realProgram": {
+  "fiveNamesOnly": {
+   "envNames": [
+    "CODEX_HOME",
+    "TARSEE_MCP_TOKEN",
+    "TARSEE_PROVIDER_KEY",
+    "TARSEE_CODEX_TURN",
+    "CODEX_INTERNAL_ORIGINATOR_OVERRIDE"
+   ],
+   "result": {
+    "pid": "22368",
+    "wait": "Ok(ExitStatus(ExitStatus(1)))",
+    "exit_code": "Some(1)",
+    "waited_ms": "1748",
+    "stdin_write": "Ok(())"
+   },
+   "stdoutLines": [],
+   "stderr": "Reading prompt from stdin...\n2026-11-13T00:41:14.571441Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when Client(HttpRequest(HttpRequest(\"http/request failed: error sending request for url (http://127.0.0.1:<PORT>/mcp)\")))\n2026-11-13T00:41:14.823009Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when Client(HttpRequest(HttpRequest(\"http/request failed: error sending request for url (http://127.0.0.1:<PORT>/mcp)\")))\n2026-11-13T00:41:15.835225Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when Client(HttpRequest(HttpRequest(\"http/request failed: error sending request for url (http://127.0.0.1:<PORT>/mcp)\")))\n2026-11-13T00:41:15.835567Z ERROR codex_core::session: Failed to create session: required MCP servers failed to initialize: tarsee: handshaking with MCP server failed: Send message error Transport [codex_rmcp_client::tool_list_changes::ToolListChanges<codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>>] error: Client error: HTTP request failed: http/request failed: error sending request for url (http://127.0.0.1:<PORT>/mcp), when send initialize request: Send message error Transport [codex_rmcp_client::tool_list_changes::ToolListChanges<codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>>] error: Client error: HTTP request failed: http/request failed: error sending request for url (http://127.0.0.1:<PORT>/mcp), when send initialize request\nError: thread/start: thread/start failed: error creating thread: Fatal error: Failed to initialize session: required MCP servers failed to initialize: tarsee: handshaking with MCP server failed: Send message error Transport [codex_rmcp_client::tool_list_changes::ToolListChanges<codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>>] error: Client error: HTTP request failed: http/request failed: error sending request for url (http://127.0.0.1:<PORT>/mcp), when send initialize request: Send message error Transport [codex_rmcp_client::tool_list_changes::ToolListChanges<codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>>] error: Client error: HTTP request failed: http/request failed: error sending request for url (http://127.0.0.1:<PORT>/mcp), when send initialize request (code -32603)\n",
+   "mcpRequests": 0,
+   "modelRequests": 0
+  },
+  "fiveNamesAndSystemRoot": {
+   "envNames": [
+    "CODEX_HOME",
+    "TARSEE_MCP_TOKEN",
+    "TARSEE_PROVIDER_KEY",
+    "TARSEE_CODEX_TURN",
+    "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+    "SYSTEMROOT"
+   ],
+   "result": {
+    "pid": "56600",
+    "wait": "Ok(ExitStatus(ExitStatus(0)))",
+    "exit_code": "Some(0)",
+    "waited_ms": "799",
+    "stdin_write": "Ok(())"
+   },
+   "stdoutLines": [
+    "{\"type\":\"thread.started\",\"thread_id\":\"01a1d25a-0033-7bf1-b840-e1d190ad1c24\"}",
+    "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Model metadata for `test-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.\"}}",
+    "{\"type\":\"turn.started\"}",
+    "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"ok\"}}",
+    "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1200,\"cached_input_tokens\":200,\"cache_write_input_tokens\":0,\"output_tokens\":30,\"reasoning_output_tokens\":12}}"
+   ],
+   "stderr": "Reading prompt from stdin...\n",
+   "mcpRequests": 3,
+   "modelRequests": 1
+  },
+  "fiveNamesAndSystemRoot_noWindowFlag": {
+   "envNames": [
+    "CODEX_HOME",
+    "TARSEE_MCP_TOKEN",
+    "TARSEE_PROVIDER_KEY",
+    "TARSEE_CODEX_TURN",
+    "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+    "SYSTEMROOT"
+   ],
+   "result": {
+    "pid": "63464",
+    "wait": "Ok(ExitStatus(ExitStatus(0)))",
+    "exit_code": "Some(0)",
+    "waited_ms": "677",
+    "stdin_write": "Ok(())"
+   },
+   "stdoutLines": [
+    "{\"type\":\"thread.started\",\"thread_id\":\"01a1d25a-035f-7a72-9e5c-b64090f4620d\"}",
+    "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Model metadata for `test-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.\"}}",
+    "{\"type\":\"turn.started\"}",
+    "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"ok\"}}",
+    "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1200,\"cached_input_tokens\":200,\"cache_write_input_tokens\":0,\"output_tokens\":30,\"reasoning_output_tokens\":12}}"
+   ],
+   "stderr": "Reading prompt from stdin...\n",
+   "mcpRequests": 3,
+   "modelRequests": 1
+  },
+  "childKillMidTurn": {
+   "result": {
+    "pid": "49612",
+    "kill_result": "Ok(())",
+    "killed_at_ms": "2507",
+    "wait": "Ok(ExitStatus(ExitStatus(1)))",
+    "exit_code": "Some(1)",
+    "waited_ms": "2523",
+    "stdin_write": "Ok(())"
+   },
+   "stdoutLines": [
+    "{\"type\":\"thread.started\",\"thread_id\":\"01a1d25a-0638-7bc0-870e-696f0dfe9620\"}",
+    "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Model metadata for `test-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.\"}}",
+    "{\"type\":\"turn.started\"}"
+   ],
+   "stderr": "Reading prompt from stdin...\n"
+  },
+  "stopWithACommandRunning": {
+   "given": "env_clear(), the names listed, CREATE_NO_WINDOW; the model asked for a PowerShell loop that rewrites a file every 100 ms; Child::kill() 6 s after the start",
+   "envNames": [
+    "CODEX_HOME",
+    "TARSEE_MCP_TOKEN",
+    "TARSEE_PROVIDER_KEY",
+    "TARSEE_CODEX_TURN",
+    "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+    "SYSTEMROOT",
+    "PATH",
+    "TEMP",
+    "USERPROFILE"
+   ],
+   "result": {
+    "pid": "42556",
+    "kill_result": "Ok(())",
+    "killed_at_ms": "6013",
+    "wait": "Ok(ExitStatus(ExitStatus(1)))",
+    "exit_code": "Some(1)",
+    "waited_ms": "6056",
+    "stdin_write": "Ok(())"
+   },
+   "stdoutLines": [
+    "{\"type\":\"thread.started\",\"thread_id\":\"01a1d25a-d3ca-7711-8197-6165bf6bb469\"}",
+    "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Model metadata for `test-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.\"}}",
+    "{\"type\":\"turn.started\"}",
+    "{\"type\":\"item.started\",\"item\":{\"id\":\"item_1\",\"type\":\"command_execution\",\"command\":\"\\\"C:\\\\\\\\Windows\\\\\\\\System32\\\\\\\\WindowsPowerShell\\\\\\\\v1.0\\\\\\\\powershell.exe\\\" -Command '$i=0; while($i -lt 400){ Set-Content -LiteralPath '\\\"'<TMP>\\\\\\\\r12-beat.txt' -Value \\\"'$i; Start-Sleep -Milliseconds 100; $i++ }'\",\"aggregated_output\":\"\",\"exit_code\":null,\"status\":\"in_progress\"}}"
+   ],
+   "stderr": "Reading prompt from stdin...\n",
+   "beat": {
+    "rightAfterTheProgramEnded": "44",
+    "after1500ms": "44",
+    "after3000ms": "44"
+   },
+   "commandStillRunningAfterwards": false
+  }
+ },
+ "whenTheParentIsKilled": {
+  "given": "a parent starts a child (node, idle, three pipes, not detached) and is then ended with taskkill /F, without /T",
+  "nodeParentKilled": {
+   "childAliveBefore": true,
+   "childAliveAfterTheParentWasKilled": false
+  },
+  "rustParentKilled": {
+   "childFound": 1,
+   "childAliveBefore": true,
+   "childAliveAfterTheParentWasKilled": true
+  }
+ }
+}

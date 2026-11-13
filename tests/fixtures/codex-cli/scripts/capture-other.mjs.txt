@@ -1,0 +1,476 @@
+#!/usr/bin/env node
+/**
+ * capture-other.mjs: the ways Tarsee starts codex WITHOUT the SDK, run against the real pinned program
+ * (@openai/codex 0.167.0) with nothing but servers on this machine:
+ *
+ *   app-server     the long-running JSON-lines process src/ai/codex-models.js talks to (initialize, initialized,
+ *                  account/read, model/list), in an empty home and in a home holding a made-up ChatGPT sign-in whose
+ *                  backend is a local logging server
+ *   login          `codex login status`, `codex logout`, and `codex login --device-auth` against a local stand-in for
+ *                  the sign-in server (the program's own --experimental_issuer option), so no real sign-in is started
+ *   stop           what Tarsee's killTree() does to a codex that has started a command of its own
+ *
+ * Every program here is started the way src/ai/codex-cli.js spawnCodex() starts it: the three CODEX_BASE_ARGS first,
+ * the server's environment minus credentials plus CODEX_HOME (codexChildEnv), the home as the working folder, pipes on
+ * all three streams. A dead proxy (HTTPS_PROXY) stands between the program and anything that is not 127.0.0.1.
+ *
+ *   node capture-other.mjs [scenario ...]
+ */
+import { spawn, spawnSync } from "node:child_process";
+import fs from "node:fs";
+import http from "node:http";
+import https from "node:https";
+import os from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+const PROJECT = process.env.CAPTURE_PROJECT || "/path/to/the/node/checkout";
+const SCRATCH = process.env.CAPTURE_SCRATCH || "/path/to/a/scratch/folder";
+const OUT = process.env.CAPTURE_OUT || path.join(SCRATCH, "fixtures-other");
+const RUNS = path.join(SCRATCH, "runs-other");
+const TMP = path.join(SCRATCH, "tmp");
+const FAKE_HOME = path.join(SCRATCH, "fake-user-home");
+for (const d of [TMP, OUT, RUNS, FAKE_HOME]) fs.mkdirSync(d, { recursive: true });
+
+const REAL_SYSTEMROOT = process.env.SYSTEMROOT || process.env.SystemRoot || "C:\\WINDOWS";
+process.env.TARSEE_STATE_DIR = path.join(SCRATCH, "tarsee-state");
+process.env.TEMP = TMP;
+process.env.TMP = TMP;
+process.env.USERPROFILE = FAKE_HOME;
+process.env.HOME = FAKE_HOME;
+process.env.APPDATA = path.join(FAKE_HOME, "AppData", "Roaming");
+process.env.LOCALAPPDATA = path.join(FAKE_HOME, "AppData", "Local");
+for (const k of Object.keys(process.env)) if (/^(OPENAI_|CODEX_|ANTHROPIC_|CLAUDE)/i.test(k)) delete process.env[k];
+
+const from = (rel) => import(pathToFileURL(path.join(PROJECT, rel)).href);
+const { CODEX_BASE_ARGS, codexChildEnv, resolveCodexBin, spawnCodex, killTree } = await from("src/ai/codex-cli.js");
+const REAL = resolveCodexBin({ env: {} });
+const { chatgptAccountsCheck, ACCOUNTS_CHECK_PATH } = await from("test/fixtures/fake-responses.js");
+const { makeTestTls } = await from("test/fixtures/test-tls.js");
+const VERSION = JSON.parse(fs.readFileSync(path.join(PROJECT, "package.json"), "utf8")).version;
+
+function serverEnv(extra = {}) {
+  return {
+    PATH: [path.join(REAL_SYSTEMROOT, "system32"), REAL_SYSTEMROOT, path.join(REAL_SYSTEMROOT, "System32", "WindowsPowerShell", "v1.0")].join(path.delimiter),
+    SystemRoot: REAL_SYSTEMROOT, SystemDrive: "C:", ComSpec: path.join(REAL_SYSTEMROOT, "system32", "cmd.exe"), TEMP: TMP, TMP,
+    USERPROFILE: FAKE_HOME, HOME: FAKE_HOME, APPDATA: process.env.APPDATA, LOCALAPPDATA: process.env.LOCALAPPDATA,
+    // Nothing but this machine: anything else goes to a proxy that is not there.
+    HTTPS_PROXY: "http://127.0.0.1:9", HTTP_PROXY: "http://127.0.0.1:9", NO_PROXY: "127.0.0.1,localhost",
+    // What the server might hold and codexChildEnv must strip:
+    OPENAI_API_KEY: ["sk-", "server-", "openai"].join(""), CODEX_API_KEY: ["sk-", "server-", "codex"].join(""), OPENAI_BASE_URL: "http://server-env.invalid/v1",
+    ...extra,
+  };
+}
+
+function forms(value) {
+  const out = new Set([value, value.split("\\").join("/")]);
+  for (let i = 0; i < 3; i++) for (const f of [...out]) out.add(JSON.stringify(f).slice(1, -1));
+  return [...out];
+}
+function scrub(text, pairs) {
+  const all = [];
+  for (const [value, label] of pairs) if (value) for (const f of forms(String(value))) all.push([f, label]);
+  all.sort((a, b) => b[0].length - a[0].length);
+  let out = text;
+  for (const [f, label] of all) out = out.split(f).join(label);
+  return out;
+}
+function save(name, why, data, pairs = []) {
+  const fixture = { name, what: why, made_with: { program: "codex 0.167.0 (the real pinned program)", platform: process.platform }, ...data };
+  let text = scrub(JSON.stringify(fixture, null, 2), [
+    ...pairs, [REAL, "<CODEX_BIN>"], [TMP, "<TMP>"], [FAKE_HOME, "<USER_HOME>"], [path.resolve(PROJECT), "<TARSEE_ROOT>"], [os.homedir(), "<USER_HOME>"], [SCRATCH, "<SCRATCH>"],
+  ]);
+  text = text.replace(/127\.0\.0\.1:\d{4,5}/g, "127.0.0.1:<PORT>");
+  text = text.split(os.hostname()).join("<MACHINE_NAME>").replace(/"installationId": "[0-9a-f-]{36}"/g, '"installationId": "<INSTALLATION_ID>"');
+  text = text.replace(/capture-ca-\d+\.pem/g, "capture-ca.pem");
+  text = text.replace(/127\.0\.0\.1%3A\d{4,5}/g, "127.0.0.1%3A<PORT>").replace(/app_[A-Za-z0-9]{20,}/g, "<CODEX_CLIENT_ID>").replace(/"login_owner_id": "[^"]+"/g, '"login_owner_id": "<LOGIN_OWNER_ID>"');
+  text = text.replace(/codex-arg0[A-Za-z0-9]{6}/g, "codex-arg0<RANDOM>");
+  fs.writeFileSync(path.join(OUT, `${name}.json`), text + "\n");
+}
+function freshHome(name) {
+  const home = path.join(RUNS, name);
+  fs.rmSync(home, { recursive: true, force: true });
+  fs.mkdirSync(home, { recursive: true });
+  return home;
+}
+function tree(dir, depth = 6, prefix = "") {
+  const out = [];
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return out; }
+  for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory() && prefix === "skills/" && e.name === ".system") { out.push("skills/.system/ (Codex's own bundled skills, not listed)"); continue; }
+    if (e.isDirectory()) { out.push(`${prefix}${e.name}/`); if (depth > 0) out.push(...tree(p, depth - 1, `${prefix}${e.name}/`)); }
+    else out.push(`${prefix}${e.name} (${fs.statSync(p).size} bytes)`);
+  }
+  return out;
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const envNames = (env) => Object.keys(env).sort();
+
+/** A local HTTP server that logs every request and answers with handler(req) -> {status, headers?, body?} (404 by default). */
+async function startLoggingServer(handler = () => null, { tls = null } = {}) {
+  const log = [];
+  const t0 = Date.now();
+  const server = (tls ? https : http).createServer(tls ? { key: tls.keyPem, cert: tls.certPem } : {}, async (req, res) => {
+    const chunks = [];
+    for await (const c of req) chunks.push(c);
+    const text = Buffer.concat(chunks).toString("utf8");
+    let body = text;
+    try { body = text ? JSON.parse(text) : null; } catch { /* keep the text */ }
+    const headers = {};
+    for (let i = 0; i < req.rawHeaders.length; i += 2) headers[req.rawHeaders[i]] = req.rawHeaders[i + 1];
+    const entry = { n: log.length + 1, at_ms: Date.now() - t0, method: req.method, path: req.url, headers, body };
+    log.push(entry);
+    const a = (await handler(entry)) || { status: 404, body: { error: "not found (capture server)" } };
+    entry.answer = { status: a.status, body: a.body ?? null };
+    res.writeHead(a.status, { "Content-Type": "application/json", ...(a.headers || {}) });
+    res.end(a.body === undefined ? "" : JSON.stringify(a.body));
+  });
+  const sockets = new Set();
+  server.on("connection", (s) => { sockets.add(s); s.on("close", () => sockets.delete(s)); });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const { port } = server.address();
+  return { origin: `${tls ? "https" : "http"}://127.0.0.1:${port}`, port, log, close() { for (const s of sockets) s.destroy(); return new Promise((r) => server.close(() => r())); } };
+}
+
+// --- A made-up ChatGPT sign-in --------------------------------------------------------------------------------------
+
+const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
+const jwt = (claims) => `${b64({ alg: "none", typ: "JWT" })}.${b64(claims)}.${["sig", "not", "real"].join("-")}`;
+function writeFakeSignIn(home, issuer) {
+  const now = Math.floor(Date.now() / 1000);
+  const claims = { chatgpt_plan_type: "free", chatgpt_account_id: "acct-capture" };
+  const access = jwt({ exp: now + 86_400 * 9, "https://api.openai.com/auth": claims });
+  const auth = {
+    auth_mode: "chatgpt", OPENAI_API_KEY: null, last_refresh: new Date().toISOString(),
+    tokens: {
+      access_token: access, refresh_token: ["rt", "capture", "not-a-token"].join("-"), account_id: "acct-capture",
+      id_token: jwt({ email: "person@example.test", exp: now + 3600, "https://api.openai.com/auth": claims }),
+      oauth_provenance: { issuer, client_id: "app_capture" },
+    },
+  };
+  fs.writeFileSync(path.join(home, "auth.json"), JSON.stringify(auth));
+  return { access, refresh: auth.tokens.refresh_token, id: auth.tokens.id_token };
+}
+
+/**
+ * A stand-in for ChatGPT's backend over HTTPS (Codex's workspace routing refuses plain http), trusted by the program
+ * through SSL_CERT_FILE: it answers which workspace the account routes to, and the account's model list with
+ * models(req) -> {status, body}.
+ */
+async function startBackend(models) {
+  const tls = makeTestTls();
+  const caFile = path.join(TMP, `capture-ca-${Date.now()}.pem`);
+  fs.writeFileSync(caFile, tls.caPem);
+  let backend;
+  backend = await startLoggingServer((req) => {
+    const p = req.path.split("?")[0];
+    if (req.method === "GET" && ACCOUNTS_CHECK_PATH.test(p)) return { status: 200, body: chatgptAccountsCheck({ accountId: "acct-capture", origin: backend.origin }) };
+    if (req.method === "GET" && p.endsWith("/codex/models")) return models(req);
+    return null;
+  }, { tls });
+  backend.caFile = caFile;
+  return backend;
+}
+
+// --- app-server ------------------------------------------------------------------------------------------------------
+
+/**
+ * One app-server conversation, the way codex-models.js holds it: each entry of `steps` is {send: msg} (one JSON line),
+ * {waitFor: id} (the answer to that request id) or {wait: ms}. Then stdin is closed and the process is given 3 s to
+ * end by itself, as codex-models.js does, before killTree().
+ */
+async function appServer({ home, extraArgs = [], env = serverEnv(), steps }) {
+  const args = [...CODEX_BASE_ARGS, ...extraArgs, "app-server"];
+  const childEnv = codexChildEnv(env, home, { RUST_LOG: "error" });
+  const t0 = Date.now();
+  const child = spawnCodex(REAL, args, { env: childEnv, cwd: home });
+  const transcript = [];
+  let stderr = "";
+  const waiters = new Map();
+  let buf = "";
+  child.stdout.on("data", (d) => {
+    buf += d.toString("utf8");
+    let nl;
+    while ((nl = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, nl).replace(/\r$/, "");
+      buf = buf.slice(nl + 1);
+      let msg = null;
+      try { msg = JSON.parse(line); } catch { /* kept as text */ }
+      transcript.push({ dir: "codex -> tarsee", at_ms: Date.now() - t0, ...(msg ? { message: msg } : { text: line }) });
+      if (msg && msg.id !== undefined && waiters.has(msg.id)) { waiters.get(msg.id)(msg); waiters.delete(msg.id); }
+    }
+  });
+  child.stderr.on("data", (d) => { stderr += d.toString("utf8"); });
+  let exit = null;
+  const closed = new Promise((r) => child.once("close", (code, signal) => { exit = { code, signal, at_ms: Date.now() - t0 }; r(); }));
+  for (const step of steps) {
+    if (step.send) {
+      transcript.push({ dir: "tarsee -> codex", at_ms: Date.now() - t0, message: step.send });
+      child.stdin.write(`${JSON.stringify(step.send)}\n`);
+    } else if (step.waitFor !== undefined) {
+      const got = await Promise.race([new Promise((r) => waiters.set(step.waitFor, r)), sleep(step.timeoutMs || 20_000).then(() => null), closed.then(() => null)]);
+      if (!got) transcript.push({ dir: "(capture)", at_ms: Date.now() - t0, text: `no answer to request ${step.waitFor}` });
+    } else if (step.wait) {
+      await sleep(step.wait);
+    }
+  }
+  const stdinClosedAt = Date.now() - t0;
+  try { child.stdin.end(); } catch { /* gone */ }
+  await Promise.race([closed, sleep(3000)]);
+  const endedByItself = !!exit;
+  await killTree(child);
+  await Promise.race([closed, sleep(4000)]);
+  return { argv: args, envNames: envNames(childEnv), envValues: { CODEX_HOME: childEnv.CODEX_HOME, RUST_LOG: childEnv.RUST_LOG }, cwd: home, transcript, stderr, stdinClosedAt_ms: stdinClosedAt, endedByItselfWithin3s: endedByItself, exit };
+}
+
+const INIT = { id: 1, method: "initialize", params: { clientInfo: { name: "tarsee", title: "Tarsee", version: VERSION } } };
+/** model/list answers are long: keep the first two models whole and only the ids of the rest. */
+function shorten(run) {
+  for (const t of run.transcript) {
+    const data = t.message?.result?.data;
+    if (Array.isArray(data) && data.length > 2) {
+      t.message.result.data = [...data.slice(0, 2), { "(capture note)": `${data.length - 2} more models, same shape`, ids: data.slice(2).map((m) => m.id) }];
+    }
+  }
+  return run;
+}
+
+async function runCli(args, { home, env = serverEnv(), stdin = null, timeoutMs = 20_000 }) {
+  const childEnv = codexChildEnv(env, home);
+  const t0 = Date.now();
+  const child = spawnCodex(REAL, args, { env: childEnv, cwd: home });
+  let stdout = "";
+  let stderr = "";
+  const order = [];
+  child.stdout.on("data", (d) => { stdout += d; order.push({ stream: "stdout", at_ms: Date.now() - t0, text: d.toString("utf8") }); });
+  child.stderr.on("data", (d) => { stderr += d; order.push({ stream: "stderr", at_ms: Date.now() - t0, text: d.toString("utf8") }); });
+  if (stdin != null) child.stdin.write(stdin);
+  child.stdin.end();
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; killTree(child); }, timeoutMs);
+  const exit = await new Promise((r) => child.once("close", (code, signal) => r({ code, signal, at_ms: Date.now() - t0 })));
+  clearTimeout(timer);
+  return { argv: args, envNames: envNames(childEnv), cwd: home, stdout, stderr, order, exit, timedOut };
+}
+
+// --- Scenarios -----------------------------------------------------------------------------------------------------
+
+const SCENARIOS = {
+  "other-01-app-server-not-signed-in": async () => {
+    const home = freshHome("app-empty");
+    const run = shorten(await appServer({
+      home,
+      steps: [
+        { send: INIT }, { waitFor: 1 }, { send: { method: "initialized" } },
+        { send: { id: 2, method: "account/read", params: { refreshToken: false } } }, { waitFor: 2 },
+        // codex-models.js stops here (account is null). The next request is only to show what model/list answers anyway.
+        { send: { id: 3, method: "model/list", params: { limit: 100, includeHidden: false } } }, { waitFor: 3 },
+        { send: { id: 4, method: "no/such/method", params: {} } }, { waitFor: 4 },
+      ],
+    }));
+    save("other-01-app-server-not-signed-in", "`codex app-server` in a home with no sign-in: initialize, initialized, account/read (account is null, where codex-models.js stops with not-signed-in), then model/list anyway (it answers from the catalog bundled in the program) and a method that does not exist.", { ...run, homeAfter: tree(home) }, [[home, "<CODEX_HOME>"]]);
+    console.log(`other-01: ${run.transcript.length} lines, exit ${JSON.stringify(run.exit)}, stderr ${run.stderr.length} bytes`);
+  },
+
+  "other-02-app-server-signed-in": async () => {
+    // The made-up sign-in's backend: a local server. The catalog it serves is the program's own bundled one
+    // (`codex debug models`), cut to two models and renamed, so the answer can be told from the bundled catalog.
+    const home = freshHome("app-signed-in");
+    const dbg = await runCli([...CODEX_BASE_ARGS, "debug", "models"], { home: freshHome("debug-models") });
+    let catalog = null;
+    try { catalog = JSON.parse(dbg.stdout); } catch { /* shown below */ }
+    const two = (catalog?.models || []).slice(0, 2).map((m, i) => ({ ...m, slug: `capture-model-${i + 1}`, display_name: `Capture Model ${i + 1}` }));
+    const backend = await startBackend(() => ({ status: 200, headers: { ETag: 'W/"capture"' }, body: { models: two } }));
+    const tokens = writeFakeSignIn(home, backend.origin);
+    const run = shorten(await appServer({
+      home, env: serverEnv({ SSL_CERT_FILE: backend.caFile }),
+      // NOT what Tarsee passes: this one extra override keeps the made-up sign-in's token on this machine.
+      extraArgs: ["-c", `chatgpt_base_url="${backend.origin}/backend-api/"`, "-c", `openai_base_url="${backend.origin}/backend-api/codex"`],
+      steps: [
+        { send: INIT }, { waitFor: 1 }, { send: { method: "initialized" } },
+        { send: { id: 2, method: "account/read", params: { refreshToken: false } } }, { waitFor: 2 },
+        { send: { id: 3, method: "model/list", params: { limit: 1, includeHidden: false } } }, { waitFor: 3 },
+        { send: { id: 4, method: "model/list", params: { limit: 1, includeHidden: false, cursor: "1" } } }, { waitFor: 4 },
+        { send: { id: 5, method: "model/list", params: { limit: 100, includeHidden: false } } }, { waitFor: 5 },
+      ],
+    }));
+    let cache = null;
+    try { cache = JSON.parse(fs.readFileSync(path.join(home, "models_cache.json"), "utf8")); } catch { /* none */ }
+    if (cache?.models) cache.models = cache.models.map((m) => ({ slug: m.slug, display_name: m.display_name, "(capture note)": `${Object.keys(m).length} fields in all` }));
+    save("other-02-app-server-signed-in", "`codex app-server` in a home holding a made-up ChatGPT sign-in (auth.json with unsigned tokens) whose backend is a local server: account/read names the account, model/list fetches the account's list from <chatgpt_base_url>/codex/models and caches it in models_cache.json. Two extra --config overrides (chatgpt_base_url, openai_base_url) and SSL_CERT_FILE, none of which Tarsee passes, keep the made-up token on this machine.", {
+      ...run,
+      // The list the stand-in served is the program's own bundled catalog (`codex debug models`): only each model's name is kept here.
+      requestsToTheBackend: backend.log.map((r) => (r.answer?.body?.models ? { ...r, answer: { ...r.answer, body: { models: r.answer.body.models.map((m) => ({ slug: m.slug, display_name: m.display_name, "(capture note)": `${Object.keys(m).length} fields in all, as \`codex debug models\` prints them` })) } } } : r)),
+      modelsCacheJson: cache, homeAfter: tree(home),
+      debugModelsCommand: { argv: dbg.argv, exit: dbg.exit, topLevelKeys: catalog ? Object.keys(catalog) : null, firstModelKeys: catalog?.models?.[0] ? Object.keys(catalog.models[0]) : null },
+    }, [[home, "<CODEX_HOME>"], [tokens.access, "<ACCESS_TOKEN>"], [tokens.id, "<ID_TOKEN>"], [tokens.refresh, "<REFRESH_TOKEN>"]]);
+    await backend.close();
+    console.log(`other-02: ${run.transcript.length} lines, ${backend.log.length} backend requests, exit ${JSON.stringify(run.exit)}, stderr ${run.stderr.length} bytes`);
+  },
+
+  "other-03-app-server-list-fetch-fails": async () => {
+    const home = freshHome("app-fetch-fails");
+    const backend = await startBackend(() => ({ status: 401, body: { detail: "Your authentication token is not from a valid issuer." } }));
+    const tokens = writeFakeSignIn(home, backend.origin);
+    const run = shorten(await appServer({
+      home, env: serverEnv({ SSL_CERT_FILE: backend.caFile }), extraArgs: ["-c", `chatgpt_base_url="${backend.origin}/backend-api/"`, "-c", `openai_base_url="${backend.origin}/backend-api/codex"`],
+      steps: [
+        { send: INIT }, { waitFor: 1 }, { send: { method: "initialized" } },
+        { send: { id: 2, method: "account/read", params: { refreshToken: false } } }, { waitFor: 2 },
+        { send: { id: 3, method: "model/list", params: { limit: 100, includeHidden: false } } }, { waitFor: 3 },
+      ],
+    }));
+    save("other-03-app-server-list-fetch-fails", "The same with a backend that refuses the list (401): model/list still answers, with the bundled catalog, and the only sign is the `failed to refresh available models` line on stderr and no models_cache.json. This is the case codex-models.js reports as not-live.", {
+      ...run, requestsToTheBackend: backend.log.map((r) => ({ n: r.n, method: r.method, path: r.path, answer: r.answer })), modelsCacheJsonExists: fs.existsSync(path.join(home, "models_cache.json")), homeAfter: tree(home),
+    }, [[home, "<CODEX_HOME>"], [tokens.access, "<ACCESS_TOKEN>"], [tokens.id, "<ID_TOKEN>"], [tokens.refresh, "<REFRESH_TOKEN>"]]);
+    await backend.close();
+    console.log(`other-03: ${run.transcript.length} lines, ${backend.log.length} backend requests, exit ${JSON.stringify(run.exit)}, stderr ${run.stderr.length} bytes`);
+  },
+
+  "other-04-login-status-and-logout": async () => {
+    const out = {};
+    const empty = freshHome("login-empty");
+    out.statusNotSignedIn = await runCli([...CODEX_BASE_ARGS, "login", "status"], { home: empty });
+    out.logoutNotSignedIn = await runCli([...CODEX_BASE_ARGS, "logout"], { home: empty });
+    out.homeAfterNotSignedIn = tree(empty);
+    const signed = freshHome("login-signed-in");
+    const revoke = await startLoggingServer(() => ({ status: 200, body: {} }));
+    const tokens = writeFakeSignIn(signed, revoke.origin);
+    out.statusChatgptSignIn = await runCli([...CODEX_BASE_ARGS, "login", "status"], { home: signed });
+    const keyHome = freshHome("login-api-key");
+    const apiKey = ["sk-", "test-not-a-key-", "login-status"].join("");
+    fs.writeFileSync(path.join(keyHome, "auth.json"), JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: apiKey }));
+    out.statusApiKey = await runCli([...CODEX_BASE_ARGS, "login", "status"], { home: keyHome });
+    // `codex logout` with a sign-in present asks the sign-in server to revoke the token: sent here to nowhere (the dead
+    // proxy), so only what it prints and leaves behind is recorded.
+    out.logoutChatgptSignIn = await runCli([...CODEX_BASE_ARGS, "logout"], { home: signed, timeoutMs: 30_000 });
+    out.authJsonAfterLogout = fs.existsSync(path.join(signed, "auth.json"));
+    out.requestsToTheIssuerOnLogout = revoke.log.map((r) => ({ method: r.method, path: r.path }));
+    await revoke.close();
+    save("other-04-login-status-and-logout", "`codex login status` and `codex logout` (each after the three CODEX_BASE_ARGS): with no sign-in, with a made-up ChatGPT sign-in, with a made-up API key in auth.json.", out,
+      [[empty, "<CODEX_HOME>"], [signed, "<CODEX_HOME>"], [keyHome, "<CODEX_HOME>"], [tokens.access, "<ACCESS_TOKEN>"], [tokens.id, "<ID_TOKEN>"], [tokens.refresh, "<REFRESH_TOKEN>"], [apiKey, "<API_KEY>"]]);
+    for (const [k, v] of Object.entries(out)) if (v?.exit) console.log(`other-04 ${k}: exit ${v.exit.code}, stdout ${JSON.stringify(v.stdout)}, stderr ${JSON.stringify(v.stderr)}`);
+    console.log(`other-04 auth.json after logout: ${out.authJsonAfterLogout}`);
+  },
+
+  /**
+   * `codex login --device-auth`, exactly as codex-device-login.js starts it, plus the program's own hidden option
+   * --experimental_issuer <url> (which Tarsee does not pass) so the "sign-in server" is a local stand-in. The link the
+   * program prints is therefore <local issuer>/codex/device instead of https://auth.openai.com/codex/device; everything
+   * else is what the real flow prints.
+   */
+  "other-05-device-login": async () => {
+    const out = {};
+    const pairs = [];
+    const now = Math.floor(Date.now() / 1000);
+    const claims = { chatgpt_plan_type: "free", chatgpt_account_id: "acct-capture" };
+    const idToken = jwt({ email: "person@example.test", exp: now + 3600, "https://api.openai.com/auth": claims });
+    const accessToken = jwt({ exp: now + 86_400 * 9, "https://api.openai.com/auth": claims });
+    const refreshToken = ["rt", "capture", "device", "not-a-token"].join("-");
+    pairs.push([idToken, "<ID_TOKEN>"], [accessToken, "<ACCESS_TOKEN>"], [refreshToken, "<REFRESH_TOKEN>"]);
+
+    /** One login: issuer(req, state) answers the stand-in sign-in server's requests; stopAfterMs kills it as cancel does. */
+    const login = async (name, issuerHandler, { stopAfterMs = null, waitMs = 40_000 } = {}) => {
+      const home = freshHome(`device-${name}`);
+      pairs.push([home, "<CODEX_HOME>"]);
+      const state = { polls: 0 };
+      const issuer = await startLoggingServer((req) => issuerHandler(req, state));
+      const args = [...CODEX_BASE_ARGS, "login", "--device-auth", "--experimental_issuer", issuer.origin];
+      const childEnv = codexChildEnv(serverEnv(), home);
+      const t0 = Date.now();
+      const child = spawnCodex(REAL, args, { env: childEnv, cwd: home });
+      child.stdin.end();
+      const order = [];
+      child.stdout.on("data", (d) => order.push({ stream: "stdout", at_ms: Date.now() - t0, text: d.toString("utf8") }));
+      child.stderr.on("data", (d) => order.push({ stream: "stderr", at_ms: Date.now() - t0, text: d.toString("utf8") }));
+      let exit = null;
+      const closed = new Promise((r) => child.once("close", (code, signal) => { exit = { code, signal, at_ms: Date.now() - t0 }; r(); }));
+      let authAt = null;
+      const poll = setInterval(() => { if (authAt == null && fs.existsSync(path.join(home, "auth.json"))) authAt = Date.now() - t0; }, 20);
+      let stopped = null;
+      if (stopAfterMs != null) {
+        await Promise.race([closed, sleep(stopAfterMs)]);
+        if (!exit) { stopped = { killTreeAt_ms: Date.now() - t0 }; await killTree(child); stopped.killTreeDone_ms = Date.now() - t0; }
+      }
+      await Promise.race([closed, sleep(waitMs)]);
+      if (!exit) { await killTree(child); await Promise.race([closed, sleep(4000)]); }
+      clearInterval(poll);
+      let auth = null;
+      try { auth = JSON.parse(fs.readFileSync(path.join(home, "auth.json"), "utf8")); } catch { /* none */ }
+      const result = {
+        argv: args, argvNote: "--experimental_issuer and its value are the capture's addition; Tarsee passes the first eight arguments only",
+        envNames: envNames(childEnv), cwd: home, stdinClosedAtOnce: true, output: order,
+        stdout: order.filter((o) => o.stream === "stdout").map((o) => o.text).join(""), stderr: order.filter((o) => o.stream === "stderr").map((o) => o.text).join(""),
+        exit, stoppedByTheCapture: stopped, authJsonAppearedAt_ms: authAt, authJson: auth,
+        requestsToTheSignInServer: issuer.log.map((r) => ({ n: r.n, at_ms: r.at_ms, method: r.method, path: r.path, contentType: r.headers["content-type"] ?? null, body: r.body, answer: r.answer })),
+        homeAfter: tree(home).filter((l) => !/sqlite|skills|sandbox/.test(l)),
+      };
+      await issuer.close();
+      console.log(`other-05 ${name}: exit ${JSON.stringify(exit)}, ${issuer.log.length} requests, auth.json ${auth ? "written" : "absent"}`);
+      return result;
+    };
+
+    const usercode = { status: 200, body: { device_auth_id: "deviceauth-capture-0001", user_code: "CAPT-12345", interval: "1" } };
+    const approved = { status: 200, body: { authorization_code: "authcode-capture-0001", code_challenge: "challenge-capture", code_verifier: "verifier-capture" } };
+    const tokens = { status: 200, body: { id_token: idToken, access_token: accessToken, refresh_token: refreshToken } };
+    const route = (req) => req.path.split("?")[0];
+
+    out.signedInAfterTwoPolls = await login("success", (req, st) => {
+      if (route(req) === "/api/accounts/deviceauth/usercode") return usercode;
+      if (route(req) === "/api/accounts/deviceauth/token") return ++st.polls <= 2 ? { status: 403, body: { error: "authorization_pending" } } : approved;
+      if (route(req) === "/oauth/token") return tokens;
+      return null;
+    });
+    out.deviceCodeSignInSwitchedOff = await login("disabled", () => ({ status: 404, body: { error: "not found" } }));
+    out.signInServerRefusesTheCodeRequest = await login("usercode-500", (req) => (route(req) === "/api/accounts/deviceauth/usercode" ? { status: 500, body: { error: "boom" } } : null));
+    out.refusedWhileWaiting = await login("poll-400", (req, st) => {
+      if (route(req) === "/api/accounts/deviceauth/usercode") return usercode;
+      if (route(req) === "/api/accounts/deviceauth/token") return ++st.polls <= 1 ? { status: 403, body: {} } : { status: 400, body: { error: "expired" } };
+      return null;
+    });
+    out.neverApprovedThenCancelled = await login("cancel", (req) => {
+      if (route(req) === "/api/accounts/deviceauth/usercode") return usercode;
+      if (route(req) === "/api/accounts/deviceauth/token") return { status: 403, body: {} };
+      return null;
+    }, { stopAfterMs: 3500 });
+    out.tokenExchangeFails = await login("exchange-fails", (req) => {
+      if (route(req) === "/api/accounts/deviceauth/usercode") return usercode;
+      if (route(req) === "/api/accounts/deviceauth/token") return approved;
+      if (route(req) === "/oauth/token") return { status: 400, body: { error: "invalid_grant", error_description: "capture refuses the exchange" } };
+      return null;
+    });
+    save("other-05-device-login", "`codex login --device-auth` against a local stand-in for the sign-in server (through the program's hidden --experimental_issuer option, which Tarsee does not pass): what it prints on which stream and when, the requests it makes, how it ends, and the auth.json it writes. Six runs: signed in after two polls; device-code sign-in switched off (404); the code request refused (500); refused while waiting (400); never approved and cancelled by killTree(); approved but the token exchange fails.", out, pairs);
+  },
+
+  /** How the program itself reads Tarsee's six MCP --config pairs, and that `codex mcp` never contacts the server. */
+  "other-08-mcp-list-and-get": async () => {
+    const home = freshHome("mcp-list");
+    const server = await startLoggingServer(() => ({ status: 500, body: {} }));
+    const pairs = [
+      "-c", `mcp_servers.tarsee.url="${server.origin}/mcp"`, "-c", 'mcp_servers.tarsee.bearer_token_env_var="TARSEE_MCP_TOKEN"',
+      "-c", 'mcp_servers.tarsee.default_tools_approval_mode="approve"', "-c", "mcp_servers.tarsee.required=true",
+      "-c", "mcp_servers.tarsee.startup_timeout_sec=20", "-c", "mcp_servers.tarsee.tool_timeout_sec=300",
+    ];
+    const env = serverEnv({ TARSEE_MCP_TOKEN_NOTE: "the token variable itself is stripped by codexChildEnv, as every credential is" });
+    const out = {
+      listJson: await runCli([...CODEX_BASE_ARGS, ...pairs, "mcp", "list", "--json"], { home, env }),
+      getJson: await runCli([...CODEX_BASE_ARGS, ...pairs, "mcp", "get", "tarsee", "--json"], { home, env }),
+      listText: await runCli([...CODEX_BASE_ARGS, ...pairs, "mcp", "list"], { home, env }),
+      requestsTheServerReceived: null,
+    };
+    out.requestsTheServerReceived = server.log.length;
+    await server.close();
+    for (const k of ["listJson", "getJson", "listText"]) { delete out[k].order; delete out[k].envNames; }
+    save("other-08-mcp-list-and-get", "`codex mcp list` and `codex mcp get tarsee` given the six --config pairs a turn gets: how the program reads them (a streamable-HTTP server with a bearer token from TARSEE_MCP_TOKEN), and that neither command sends the server anything.", out, [[home, "<CODEX_HOME>"]]);
+    console.log(`other-08: list exit ${out.listJson.exit.code}, get exit ${out.getJson.exit.code}, requests to the server ${out.requestsTheServerReceived}`);
+  },
+};
+
+const only = process.argv.slice(2);
+for (const [name, fn] of Object.entries(SCENARIOS)) {
+  if (only.length && !only.some((o) => name.includes(o))) continue;
+  try { await fn(); } catch (err) { console.log(`${name}: CAPTURE FAILED: ${err?.stack || err}`); }
+}
+process.exit(0);

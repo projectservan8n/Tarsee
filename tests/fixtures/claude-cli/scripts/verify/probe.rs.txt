@@ -1,0 +1,93 @@
+// Verification probe, standard library only. Three questions the specification leaves open for a Rust engine on
+// Windows:
+//   1. Do the arguments (the --mcp-config JSON, `*`, `[1m]`, a path with a space) reach a native program intact?
+//   2. Do they reach it through a `.cmd` shim (the shape an npm global install leaves)?
+//   3. What exit code does a killed process report?
+// usage: probe <fake-claude.exe> <shim.cmd> <out-dir>
+use std::env;
+use std::fs;
+use std::io::Write;
+use std::path::Path;
+use std::process::{Command, Stdio};
+use std::thread::sleep;
+use std::time::{Duration, Instant};
+
+fn args_under_test() -> Vec<String> {
+    vec![
+        "--output-format".into(), "stream-json".into(), "--verbose".into(), "--input-format".into(), "stream-json".into(),
+        "--max-turns=50".into(), "--model=deepseek-flash[1m]".into(),
+        "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*".into(),
+        "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*".into(),
+        "--mcp-config".into(),
+        r#"{"mcpServers":{"tarsee":{"type":"http","url":"http://127.0.0.1:45678/mcp","headers":{"Authorization":"Bearer ${TARSEE_MCP_TOKEN}"},"alwaysLoad":true}}}"#.into(),
+        "--setting-sources=project".into(), "--strict-mcp-config".into(),
+        "--permission-mode=bypassPermissions".into(), "--allow-dangerously-skip-permissions".into(),
+        "--include-partial-messages".into(), r"--add-dir=C:\some folder\with space & 100%\skills".into(),
+    ]
+}
+
+fn run_and_read_argv(program: &Path, out: &Path, scenario: &str) -> Result<Vec<String>, String> {
+    let _ = fs::remove_file(out);
+    let mut cmd = Command::new(program);
+    cmd.args(args_under_test())
+        .env_clear()
+        .env("SystemRoot", env::var("SystemRoot").unwrap_or_default())
+        .env("PATH", env::var("PATH").unwrap_or_default())
+        .env("COMSPEC", env::var("COMSPEC").unwrap_or_default())
+        .env("VSTUB_OUT", out)
+        .env("VSTUB_SCENARIO", scenario)
+        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = cmd.spawn().map_err(|e| format!("spawn failed: {e} (kind {:?})", e.kind()))?;
+    drop(child.stdin.take());
+    let outp = child.wait_with_output().map_err(|e| e.to_string())?;
+    let text = fs::read_to_string(out).map_err(|e| format!("no record written: {e}; exit {:?}; stderr {}", outp.status.code(), String::from_utf8_lossy(&outp.stderr)))?;
+    let first = text.lines().next().unwrap_or("");
+    // the record's first line is {"t":..,"ev":"start","argv":[...],...}: cut the argv array out without a JSON library
+    let start = first.find("\"argv\":[").ok_or("no argv in the record")? + 7;
+    let end = first[start..].find("],\"cwd\"").ok_or("no end of argv")? + start + 1;
+    Ok(vec![first[start..end].to_string()])
+}
+
+fn json_array(args: &[String]) -> String {
+    let mut s = String::from("[");
+    for (i, a) in args.iter().enumerate() {
+        if i > 0 { s.push(','); }
+        s.push('"');
+        for c in a.chars() { match c { '"' => s.push_str("\\\""), '\\' => s.push_str("\\\\"), _ => s.push(c) } }
+        s.push('"');
+    }
+    s.push(']');
+    s
+}
+
+fn main() {
+    let a: Vec<String> = env::args().collect();
+    let exe = Path::new(&a[1]);
+    let shim = Path::new(&a[2]);
+    let dir = Path::new(&a[3]);
+    let want = json_array(&args_under_test());
+
+    match run_and_read_argv(exe, &dir.join("probe-native.jsonl"), "exit0-at-once") {
+        Ok(v) => println!("1. native .exe: arguments intact = {}", v[0] == want),
+        Err(e) => println!("1. native .exe: {e}"),
+    }
+    match run_and_read_argv(shim, &dir.join("probe-shim.jsonl"), "exit0-at-once") {
+        Ok(v) => { println!("2. .cmd shim: arguments intact = {}", v[0] == want); if v[0] != want { println!("   sent : {want}\n   got  : {}", v[0]); } }
+        Err(e) => println!("2. .cmd shim: {e}"),
+    }
+
+    // 3. kill a process that never exits by itself
+    let out = dir.join("probe-kill.jsonl");
+    let _ = fs::remove_file(&out);
+    let mut child = Command::new(exe)
+        .env("VSTUB_OUT", &out).env("VSTUB_SCENARIO", "hang")
+        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped())
+        .spawn().expect("spawn");
+    let mut stdin = child.stdin.take().unwrap();
+    stdin.write_all(b"{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"hi\"}]}}\n").unwrap();
+    sleep(Duration::from_millis(700));
+    let t = Instant::now();
+    child.kill().expect("kill");
+    let status = child.wait().expect("wait");
+    println!("3. killed with Child::kill(): status.code() = {:?}, success = {}, wait returned after {} ms", status.code(), status.success(), t.elapsed().as_millis());
+}
