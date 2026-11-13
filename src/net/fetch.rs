@@ -329,6 +329,11 @@ fn connect_failure_text(err: &reqwest::Error) -> String {
     }
     let said = |needle: &str| texts.iter().any(|text| text.contains(needle));
 
+    // A server that takes the connection and hangs up without an answer: Node reports a reset ("socket hang up",
+    // code ECONNRESET). hyper says the connection closed before the message completed, with no io::Error under it.
+    if said("connection closed before message completed") || said("incompletemessage") || said("unexpected eof") {
+        return "read ECONNRESET".to_string();
+    }
     // The resolver's failure comes first: it also ends in an io::Error, of no particular kind.
     if said("dns error")
         || said("failed to lookup address")
@@ -340,7 +345,9 @@ fn connect_failure_text(err: &reqwest::Error) -> String {
     let code = match io_kind {
         Some(ErrorKind::ConnectionRefused) => Some("ECONNREFUSED"),
         Some(ErrorKind::ConnectionReset) => Some("ECONNRESET"),
-        Some(ErrorKind::ConnectionAborted) => Some("ECONNABORTED"),
+        // Windows reports a connection the other side dropped as "aborted" as often as "reset", depending on
+        // timing; Node gave ECONNRESET for both.
+        Some(ErrorKind::ConnectionAborted) => Some("ECONNRESET"),
         Some(ErrorKind::TimedOut) => Some("ETIMEDOUT"),
         Some(ErrorKind::HostUnreachable) => Some("EHOSTUNREACH"),
         Some(ErrorKind::NetworkUnreachable) => Some("ENETUNREACH"),
@@ -553,6 +560,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, FetchError::Connect(_)), "{err:?}");
+        assert_eq!(err.code(), Some("ECONNRESET"), "{err:?}");
     }
 
     #[test]

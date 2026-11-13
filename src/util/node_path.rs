@@ -51,14 +51,21 @@ pub fn normalize(path: &Path) -> PathBuf {
     PathBuf::from(out)
 }
 
-/// `path.join(base, piece)` for a piece the program itself wrote (never for one that came from outside: see
-/// "Joining paths" in the design). The result is normalised, as Node's is.
+/// `path.join(base, piece)`: the two joined as text with a separator between them, then normalised, exactly as
+/// Node's does. Unlike `Path::join`, the piece can never replace the base: `join("C:\\ws", "C:\\Windows")` is
+/// `C:\ws\C:\Windows` and `join("/ws", "/etc")` is `/ws/etc`. A `..` in the piece still climbs, as in Node, so
+/// a piece from outside is checked first all the same (see "Joining paths" in the design).
 pub fn join(base: &Path, piece: impl AsRef<Path>) -> PathBuf {
-    normalize(&base.join(piece))
+    let mut text = base.as_os_str().to_os_string();
+    text.push(std::path::MAIN_SEPARATOR_STR);
+    text.push(piece.as_ref().as_os_str());
+    normalize(Path::new(&text))
 }
 
-/// `path.toNamespacedPath(p)`: on Windows, an absolute path in the form the system takes literally
-/// (`\\?\C:\dir\name`); the path itself everywhere else, and for a relative path.
+/// `path.toNamespacedPath(p)`: on Windows, the path in the form the system takes literally
+/// (`\\?\C:\dir\name`); the path itself everywhere else. A relative path is first made absolute against the
+/// current folder, as Node's does (`path.resolve`), so that it gets the literal form too: a relative state folder
+/// would otherwise leave every name under it open to the rewriting described below.
 ///
 /// Node's file functions pass every path this way, so a name means exactly what it says. Rust's `std::fs` passes
 /// paths as they are, and Windows then rewrites the last name: it drops trailing dots and spaces (`data.db.` opens
@@ -70,9 +77,51 @@ pub fn to_namespaced(path: &Path) -> PathBuf {
     #[cfg(windows)]
     {
         let text = path.to_string_lossy();
-        if text.starts_with(r"\\?\") || text.starts_with(r"\\.\") || !path.is_absolute() {
+        if text.starts_with(r"\\?\") || text.starts_with(r"\\.\") {
             return path.to_path_buf();
         }
+        let resolved;
+        let path = if path.is_absolute() {
+            path
+        } else {
+            // Not `std::path::absolute`: it asks Windows for the full path, and Windows drops the trailing dots and
+            // spaces this function exists to keep.
+            let Ok(current) = std::env::current_dir() else {
+                return path.to_path_buf();
+            };
+            let mut parts = path.components();
+            resolved = match parts.next() {
+                // `\dir\name`: on the current drive.
+                Some(Component::RootDir) => {
+                    let drive = current
+                        .components()
+                        .next()
+                        .map(|c| c.as_os_str().to_os_string())
+                        .unwrap_or_default();
+                    let mut text = drive;
+                    text.push(path.as_os_str());
+                    PathBuf::from(text)
+                }
+                // `C:name`: under the current folder when it is on that drive, else under the drive's root.
+                Some(Component::Prefix(prefix)) => {
+                    let rest = parts.as_path();
+                    let same_drive = current
+                        .components()
+                        .next()
+                        .is_some_and(|c| c.as_os_str().eq_ignore_ascii_case(prefix.as_os_str()));
+                    if same_drive {
+                        join(&current, rest)
+                    } else {
+                        let mut text = prefix.as_os_str().to_os_string();
+                        text.push(std::path::MAIN_SEPARATOR_STR);
+                        text.push(rest.as_os_str());
+                        PathBuf::from(text)
+                    }
+                }
+                _ => join(&current, path),
+            };
+            resolved.as_path()
+        };
         // The literal form takes no `.`, no `..` and no forward slashes: normalise first.
         let normal = normalize(path);
         let normal = normal.to_string_lossy();
@@ -122,9 +171,57 @@ mod tests {
         assert_eq!(n("C:\\a\\..\\..\\b"), "C:/b");
     }
 
+    #[cfg(not(windows))]
     #[test]
-    fn a_relative_path_is_left_alone() {
+    fn elsewhere_a_relative_path_is_left_alone() {
         assert_eq!(to_namespaced(Path::new("a/b.")), PathBuf::from("a/b."));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn on_windows_a_relative_path_is_resolved_against_the_current_folder_and_keeps_its_name() {
+        let current = std::env::current_dir().unwrap();
+        let literal = to_namespaced(Path::new("a/b."));
+        let text = literal.to_string_lossy().into_owned();
+        assert!(text.starts_with(r"\\?\"), "{text}");
+        assert!(text.ends_with(r"\a\b."), "{text}");
+        assert!(
+            text.contains(current.to_string_lossy().trim_start_matches(r"\\?\")),
+            "{text}"
+        );
+        // A path with a root and no drive is on the current drive.
+        let drive = current
+            .components()
+            .next()
+            .unwrap()
+            .as_os_str()
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(
+            to_namespaced(Path::new(r"\data\x.")),
+            PathBuf::from(format!(r"\\?\{drive}\data\x."))
+        );
+    }
+
+    #[test]
+    fn join_never_lets_the_piece_replace_the_base() {
+        assert_eq!(
+            n(&join(Path::new("/ws"), "/etc/passwd").to_string_lossy()),
+            "/ws/etc/passwd"
+        );
+        assert_eq!(n(&join(Path::new("ws"), "a/../b").to_string_lossy()), "ws/b");
+        #[cfg(windows)]
+        {
+            assert_eq!(
+                join(Path::new(r"C:\ws"), r"C:\Windows\win.ini"),
+                PathBuf::from(r"C:\ws\C:\Windows\win.ini")
+            );
+            assert_eq!(
+                join(Path::new(r"C:\ws"), r"\\server\share\x"),
+                PathBuf::from(r"C:\ws\server\share\x")
+            );
+            assert_eq!(join(Path::new(r"C:\ws"), "D:x"), PathBuf::from(r"C:\ws\D:x"));
+        }
     }
 
     #[cfg(not(windows))]
