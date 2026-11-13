@@ -1,4 +1,7 @@
-| E1 | reviewed | - | 55fa65f, fixes 96f4ac4 | 1573 | 128 of 128 cases. Review: faithful, 2 minor; fixes and two Node bug fixes confirmed by a second reviewer || I0 | reviewed | - | 7957ca6, fixes 38a6adb | 1562 | Interfaces and fakes; `INTERFACES.md`. Review: 1 important, 4 minor, all confirmed fixed by a second reviewer || B1 | reviewed | - | 1649cf7, fixes 9aa27aa | 1757 | 36 of 36 cases. Review: nothing critical or important in the package; 2 minor and two Node bugs fixed, confirmed by a second reviewer |# Tarsee in Rust: status ledger
+| A3 | merged | - | merged after 2a25f20 | 2403 | 125 of 126 cases (1 belongs to R2). Spend compared with Node on 659,488 answers. Review to run |
+| A4 | running | s6 | | | |
+| S1 | running | s10 | | | |
+| U1 | running | s4 | | | Starting and stopping programs, in one place || E1 | reviewed | - | 55fa65f, fixes 96f4ac4 | 1573 | 128 of 128 cases. Review: faithful, 2 minor; fixes and two Node bug fixes confirmed by a second reviewer || I0 | reviewed | - | 7957ca6, fixes 38a6adb | 1562 | Interfaces and fakes; `INTERFACES.md`. Review: 1 important, 4 minor, all confirmed fixed by a second reviewer || B1 | reviewed | - | 1649cf7, fixes 9aa27aa | 1757 | 36 of 36 cases. Review: nothing critical or important in the package; 2 minor and two Node bugs fixed, confirmed by a second reviewer |# Tarsee in Rust: status ledger
 
 The lead keeps this file. It is the record that survives a lost context: trust it and `git log` over memory.
 Plan: `docs/rust-port/PLAN.md`. Spec: `docs/rust-port/DESIGN.md`.
@@ -175,7 +178,6 @@ version starts and talks to the `claude` and `codex` programs (`docs/rust-port/e
 
 ## Follow-ups owed by later packages
 
-- A1: build `engine_env::ProviderEntry` from the registry; replace the copied values in `src/ai/engine_env/tests.rs`.
 - A4: `routes::skills::unhandled_error` calls the `record_error` of self-heal.
 - Z1: `canvas_middleware(app, signed_in, req)` gets the sign-in state from B1; a `tarsee whisper-models download
   <model> <folder>` command (`voice::whisper_models::run_download_command`); `server.rs` calls the `install(app)`

@@ -230,6 +230,8 @@ text identical, including the `[tag]` prefix: people grep their logs for it.
      not U+0085; Rust does the opposite. The same two characters differ in `\s`.
    - On Windows an environment variable's name matches whatever its case (`Path`). `Env` does that for `get`,
      `set` and `remove`; a `snapshot()` is a plain map, so look names up in the `Env`, not in a snapshot.
+   - A timezone name is parsed with `util::tz::parse`, which takes any letter case as `Intl` does; `chrono_tz`
+     alone would turn `asia/manila` into UTC without a word.
    - `||` treats `0`, `""` and `null` alike; `??` does not. Check which one the Node code used.
    - `JSON.stringify(x, null, 2)` is `serde_json::to_string_pretty`. `new Date().toISOString()` is
      `util::js::now_iso()`. `Date.now()` is `util::js::now_ms()`.

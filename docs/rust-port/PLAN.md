@@ -166,7 +166,6 @@ cases must be ported with them, and the packages that must be merged first.
   - `src/ai/provider-models.js` (237) -> `src/ai/provider_models.rs`
   - `src/lib/model-catalog.js` (680) -> `src/lib/model_catalog.rs`
   - `src/lib/security-audit.js` (155) -> `src/lib/security_audit.rs`
-  - `src/lib/boot-fixups.js` (55) -> `src/lib/boot_fixups.rs`
   - `src/lib/self-heal.js` (503) -> `src/lib/self_heal.rs`
   - `src/routes/health.js` (62) -> `src/routes/health.rs`
   - `src/middleware/error-handler.js` (32) -> `src/middleware/error_handler.rs`
@@ -369,6 +368,7 @@ cases must be ported with them, and the packages that must be merged first.
   - `src/lib/retention.js` (376) -> `src/lib/retention.rs`
   - `src/routes/automation-approval.js` (63) -> `src/routes/automation_approval.rs`
   - `src/lib/build-system-prompt.js` (192) -> `src/lib/build_system_prompt.rs`
+  - `src/lib/boot-fixups.js` (55) -> `src/lib/boot_fixups.rs` (moved here from A4: it calls the settings store)
 - **Tests to port:**
   - `test/ai-security.test.js` (240)
   - `test/conversation-settings-cleanup.test.js` (91)

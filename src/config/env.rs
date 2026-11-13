@@ -246,7 +246,7 @@ fn resolve_timezone(env: &Env) -> String {
     let Some(candidate) = candidate else {
         return "UTC".to_string();
     };
-    if candidate.parse::<chrono_tz::Tz>().is_ok() {
+    if crate::util::tz::parse(&candidate).is_some() {
         return candidate;
     }
     log::warn!(
@@ -478,6 +478,9 @@ mod tests {
         let env = env_in(dir.path());
         env.set("TARSEE_TIMEZONE", "Europe/Berlin");
         assert_eq!(Config::load(&env).timezone, "Europe/Berlin");
+        // In another letter case it is kept as typed, and still means the zone.
+        env.set("TARSEE_TIMEZONE", "asia/manila");
+        assert_eq!(Config::load(&env).timezone, "asia/manila");
         env.set("TARSEE_TIMEZONE", "Mars/Olympus_Mons");
         assert_eq!(Config::load(&env).timezone, "UTC");
     }

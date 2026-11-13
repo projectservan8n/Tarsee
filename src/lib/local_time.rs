@@ -5,14 +5,15 @@
 //! since the Unix epoch, as in the JS (`Date.now()`).
 
 use chrono::{DateTime, Offset, TimeZone, Utc};
-use chrono_tz::Tz;
 
 const H: i64 = 3_600_000;
 const DAY: i64 = 24 * H;
 
 /// How far a timezone is ahead of UTC at a moment, in ms (UTC+8 is 28_800_000; an unknown zone counts as UTC).
 pub fn zone_offset_ms(ms: i64, time_zone: &str) -> i64 {
-    let Ok(tz) = time_zone.parse::<Tz>() else { return 0 };
+    let Some(tz) = crate::util::tz::parse(time_zone) else {
+        return 0;
+    };
     let Some(utc) = DateTime::<Utc>::from_timestamp_millis(ms) else {
         return 0;
     };
@@ -87,6 +88,8 @@ mod tests {
         assert_eq!(zone_offset_ms(winter, "America/New_York"), -5 * H);
         assert_eq!(zone_offset_ms(winter, "UTC"), 0);
         assert_eq!(zone_offset_ms(winter, "Mars/Olympus_Mons"), 0);
+        // A name in another letter case is the same zone, as it was for JavaScript.
+        assert_eq!(zone_offset_ms(winter, "asia/manila"), 8 * H);
     }
 
     #[test]
